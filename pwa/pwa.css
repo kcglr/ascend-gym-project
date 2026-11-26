@@ -1,0 +1,24 @@
+/* The installable web app stands on its own. This restates what the Claude Artifact host gives the page
+   for free (no body margin, room for the notch at the top), and adds what an app on a home screen needs.
+   It comes after ui.css, so it may adjust it. */
+html {
+  -webkit-text-size-adjust: 100%; text-size-adjust: 100%;
+  background: var(--bg, #04050d);
+  padding: env(safe-area-inset-top, 0px) 0 0;
+}
+body { margin: 0; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } /* a game screen, not a document: no text selection or long-press menus */
+input, textarea { -webkit-user-select: text; user-select: text; }
+img { max-width: 100%; -webkit-user-drag: none; }
+[hidden] { display: none !important; }
+#app { padding-bottom: calc(108px + env(safe-area-inset-bottom, 0px)); } /* the tab bar grows by the home bar's height, and so does the room under the last panel */
+
+/* Opened from the home screen the page runs under the status bar. This strip keeps the clock and the battery readable while the page scrolls beneath them. */
+#statusbar {
+  position: fixed; z-index: 6; left: 0; right: 0; top: 0; height: env(safe-area-inset-top, 0px); pointer-events: none;
+  background: linear-gradient(180deg, rgb(var(--ink) / .96), rgb(var(--ink) / .7));
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html { overscroll-behavior-y: none; } /* no pull-to-refresh and no rubber band behind the fixed bars */
+}
+.nojs { margin: 0; padding: 40px 24px; text-align: center; color: #e8f0ff; font: 16px/1.5 system-ui, sans-serif; }
