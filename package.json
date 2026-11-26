@@ -1,0 +1,14 @@
+{
+  "name": "ascend-daily-quest",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Ascend: Daily Quest. A gamified daily workout tracker, built as an installable web app.",
+  "scripts": {
+    "build": "node build.js",
+    "test": "node tests/engine.test.js",
+    "test:ui": "node build.js && node tests/ui.test.js",
+    "test:pwa": "node build.js && node tests/pwa.test.js",
+    "test:all": "node tests/engine.test.js && node build.js && node tests/ui.test.js && node tests/pwa.test.js",
+    "icons": "python3 art/app_icons.py"
+  }
+}
