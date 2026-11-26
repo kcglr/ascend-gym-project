@@ -1,0 +1,596 @@
+<title>Daily Quest System</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one phone-width column. A status strip on top, one glowing "system window" per screen, tab bar pinned below. */
+:root {
+  color-scheme: dark;
+  --bg: #04070e;
+  --bg2: #081223;
+  --panel: #0a1628;
+  --panel2: #0e1e36;
+  --line: #1f4f8f;
+  --glow: #4db4ff;
+  --glow-soft: rgba(77, 180, 255, .28);
+  --text: #dceaff;
+  --dim: #7f95b8;
+  --gold: #ffd166;
+  --ok: #4ee6ad;
+  --warn: #ff6274;
+  --display: "Chakra Petch", "Trebuchet MS", "Segoe UI", sans-serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  background:
+    radial-gradient(120% 60% at 50% -10%, #0d2a55 0%, transparent 60%),
+    linear-gradient(var(--bg2), var(--bg) 40%);
+  background-color: var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.45;
+  -webkit-tap-highlight-color: transparent;
+}
+body::after { /* faint scan grid */
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 0;
+  background-image: linear-gradient(rgba(77,180,255,.045) 1px, transparent 1px), linear-gradient(90deg, rgba(77,180,255,.045) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: linear-gradient(#000, transparent 75%);
+  -webkit-mask-image: linear-gradient(#000, transparent 75%);
+}
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; touch-action: manipulation; }
+:focus-visible { outline: 2px solid var(--glow); outline-offset: 2px; }
+
+#app {
+  position: relative; z-index: 1;
+  max-width: 460px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 14px 96px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+
+/* status strip */
+.hud { display: grid; grid-template-columns: auto 1fr; gap: 12px; align-items: center; }
+.emblem {
+  width: 54px; height: 60px; display: grid; place-items: center;
+  clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%);
+  background: linear-gradient(160deg, var(--glow), #1b5fd0);
+  font-family: var(--display); font-weight: 700; font-size: 26px; color: #03101f;
+}
+.emblem-wrap { filter: drop-shadow(0 0 10px var(--glow-soft)); }
+.emblem.big { width: 92px; height: 102px; font-size: 46px; }
+.hud-main { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.hud-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.pname { font-family: var(--display); font-weight: 600; font-size: 18px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.plevel { font-family: var(--mono); font-size: 13px; color: var(--glow); white-space: nowrap; }
+.ptitle { font-size: 12px; color: var(--dim); letter-spacing: .04em; }
+.bar { height: 8px; background: #07101e; border: 1px solid var(--line); position: relative; overflow: hidden; }
+.bar > i { position: absolute; inset: 0 auto 0 0; background: linear-gradient(90deg, #1b6fe0, var(--glow)); box-shadow: 0 0 10px var(--glow); transition: width .45s cubic-bezier(.2,.8,.2,1); }
+.bar.ok > i { background: linear-gradient(90deg, #1fae7e, var(--ok)); box-shadow: 0 0 10px var(--ok); }
+.xpline { display: flex; justify-content: space-between; font-family: var(--mono); font-size: 11px; color: var(--dim); }
+
+/* system window */
+.win {
+  position: relative;
+  background: linear-gradient(180deg, rgba(14,30,54,.94), rgba(8,18,34,.94));
+  border: 1px solid var(--line);
+  box-shadow: 0 0 0 1px rgba(77,180,255,.08), 0 0 24px rgba(40,120,255,.16), inset 0 0 30px rgba(40,120,255,.06);
+  padding: 16px 14px;
+  display: flex; flex-direction: column; gap: 14px;
+}
+.win::before, .win::after { /* corner brackets */
+  content: ""; position: absolute; width: 14px; height: 14px; border: 2px solid var(--glow); pointer-events: none;
+}
+.win::before { top: -2px; left: -2px; border-right: 0; border-bottom: 0; }
+.win::after { bottom: -2px; right: -2px; border-left: 0; border-top: 0; }
+.win-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(77,180,255,.22); }
+.win-title { font-family: var(--display); font-weight: 700; font-size: 20px; letter-spacing: .12em; text-transform: uppercase; color: var(--glow); text-shadow: 0 0 12px var(--glow-soft); margin: 0; }
+.win-sub { font-size: 12.5px; color: var(--dim); margin-top: 2px; }
+.chip { font-family: var(--mono); font-size: 12px; padding: 4px 8px; border: 1px solid var(--line); color: var(--text); white-space: nowrap; }
+.chip.hot { border-color: var(--gold); color: var(--gold); }
+.label { font-family: var(--display); font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+
+/* quests */
+.quests { display: flex; flex-direction: column; gap: 12px; }
+.quest { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: rgba(4,10,20,.55); border: 1px solid rgba(77,180,255,.18); }
+.quest.done { border-color: rgba(78,230,173,.5); }
+.q-top { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.q-name { font-family: var(--display); font-weight: 600; font-size: 17px; display: flex; align-items: baseline; gap: 8px; }
+.q-stat { font-family: var(--mono); font-size: 10.5px; color: var(--glow); border: 1px solid var(--line); padding: 1px 5px; }
+.q-count { font-family: var(--mono); font-weight: 700; font-size: 17px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.q-count small { font-weight: 500; color: var(--dim); font-size: 12px; }
+.quest.done .q-count { color: var(--ok); }
+.q-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.btn {
+  min-height: 42px; padding: 0 12px; background: rgba(27,111,224,.14); border: 1px solid var(--line);
+  font-family: var(--mono); font-weight: 700; font-size: 14px; color: var(--text);
+  transition: transform .08s, background .15s;
+}
+.btn:active { transform: scale(.95); background: rgba(77,180,255,.3); }
+.btn.grow { flex: 1 1 52px; }
+.btn.primary { background: linear-gradient(180deg, #2a86f3, #1658c4); border-color: var(--glow); color: #fff; box-shadow: 0 0 16px var(--glow-soft); font-family: var(--display); letter-spacing: .1em; text-transform: uppercase; }
+.btn.ghost { background: transparent; color: var(--dim); font-family: var(--body); font-weight: 500; }
+.btn.danger { border-color: var(--warn); color: var(--warn); background: rgba(255,98,116,.08); font-family: var(--body); font-weight: 600; }
+.btn:disabled { opacity: .4; cursor: default; }
+.addrow { display: flex; gap: 6px; flex: 1 1 130px; min-width: 0; }
+.field {
+  min-width: 0; width: 100%; min-height: 42px; padding: 0 10px; background: #050c18; border: 1px solid var(--line);
+  font-family: var(--mono); font-size: 15px; color: var(--text);
+}
+.field::placeholder { color: #4d6283; }
+.q-done { font-family: var(--display); font-size: 12px; letter-spacing: .16em; color: var(--ok); }
+.note { font-size: 13px; color: var(--dim); }
+.note b { color: var(--text); font-weight: 600; }
+.row { display: flex; gap: 8px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.cleared-banner { border: 1px solid var(--ok); background: rgba(78,230,173,.08); padding: 10px 12px; color: var(--ok); font-family: var(--display); letter-spacing: .08em; }
+
+/* status */
+.status-top { display: flex; gap: 16px; align-items: center; }
+.kv { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.kv > div { border: 1px solid rgba(77,180,255,.18); padding: 8px; background: rgba(4,10,20,.5); min-width: 0; }
+.kv b { display: block; font-family: var(--mono); font-size: 19px; font-variant-numeric: tabular-nums; }
+.stat { display: grid; grid-template-columns: 44px 1fr 62px; gap: 10px; align-items: center; font-family: var(--mono); font-size: 13px; }
+.stat span:last-child { text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+.stack { display: flex; flex-direction: column; gap: 9px; }
+.titles { display: flex; flex-direction: column; gap: 6px; }
+.title-item { display: flex; justify-content: space-between; gap: 10px; align-items: center; text-align: left; width: 100%; padding: 9px 10px; background: rgba(4,10,20,.5); border: 1px solid rgba(77,180,255,.18); }
+.title-item b { font-family: var(--display); font-weight: 600; font-size: 14.5px; display: block; }
+.title-item small { color: var(--dim); font-size: 12px; }
+.title-item.locked { opacity: .45; }
+.title-item.on { border-color: var(--gold); }
+.title-item .tag { font-family: var(--mono); font-size: 10.5px; color: var(--gold); white-space: nowrap; }
+
+/* log */
+.cal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; }
+.cal .dow { font-family: var(--mono); font-size: 10px; color: var(--dim); text-align: center; }
+.cell { aspect-ratio: 1; display: grid; place-items: center; font-family: var(--mono); font-size: 11px; color: var(--dim); border: 1px solid rgba(77,180,255,.14); background: rgba(4,10,20,.5); }
+.cell.part { background: rgba(77,180,255,.16); color: var(--text); }
+.cell.clear { background: linear-gradient(160deg, #2a86f3, #1658c4); color: #fff; border-color: var(--glow); box-shadow: 0 0 8px var(--glow-soft); }
+.cell.today { outline: 1px solid var(--gold); outline-offset: 1px; }
+.cell.future { opacity: .25; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--dim); align-items: center; }
+.legend i { display: inline-block; width: 11px; height: 11px; margin-right: 5px; vertical-align: -1px; border: 1px solid rgba(77,180,255,.3); }
+
+/* tab bar */
+.tabs {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 5;
+  background: rgba(4,8,16,.94); border-top: 1px solid var(--line); backdrop-filter: blur(8px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.tabs-in { max-width: 428px; margin: 0 auto; display: grid; grid-template-columns: repeat(4, 1fr); }
+.tab { background: none; border: 0; border-top: 2px solid transparent; padding: 12px 0 11px; font-family: var(--display); font-size: 12.5px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+.tab[aria-selected="true"] { color: var(--glow); border-top-color: var(--glow); text-shadow: 0 0 10px var(--glow-soft); }
+
+/* toasts */
+#toasts { position: fixed; left: 0; right: 0; bottom: calc(66px + env(safe-area-inset-bottom, 0px)); z-index: 8; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; padding: 0 16px; }
+.toast { font-family: var(--mono); font-weight: 700; font-size: 13px; padding: 7px 12px; background: rgba(6,14,28,.96); border: 1px solid var(--glow); color: var(--glow); box-shadow: 0 0 14px var(--glow-soft); animation: toast 2.2s forwards; }
+.toast.gold { border-color: var(--gold); color: var(--gold); }
+.toast.ok { border-color: var(--ok); color: var(--ok); }
+@keyframes toast { 0% { opacity: 0; transform: translateY(10px); } 12%, 80% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-8px); } }
+
+/* overlays */
+.overlay { position: fixed; inset: 0; z-index: 20; background: rgba(2,5,12,.9); display: grid; place-items: center; overflow-y: auto;
+  padding: calc(20px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(20px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.overlay .win { width: 100%; max-width: 420px; animation: pop .35s cubic-bezier(.2,.9,.3,1.2); }
+@keyframes pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+.center { text-align: center; align-items: center; }
+.big-word { font-family: var(--display); font-weight: 700; font-size: clamp(34px, 11vw, 48px); letter-spacing: .14em; line-height: 1.05; color: var(--glow); text-shadow: 0 0 18px var(--glow), 0 0 44px rgba(40,120,255,.7); margin: 0; animation: wordin .7s cubic-bezier(.2,.8,.2,1); }
+.gold .big-word { color: var(--gold); text-shadow: 0 0 18px var(--gold), 0 0 44px rgba(255,170,40,.6); }
+.gold.win { border-color: var(--gold); }
+.gold.win::before, .gold.win::after { border-color: var(--gold); }
+.warnwin.win { border-color: var(--warn); }
+.warnwin.win::before, .warnwin.win::after { border-color: var(--warn); }
+.warnwin .big-word { color: var(--warn); text-shadow: 0 0 18px rgba(255,98,116,.7); font-size: clamp(26px, 8vw, 34px); }
+@keyframes wordin { from { opacity: 0; letter-spacing: .6em; filter: blur(6px); } to { opacity: 1; filter: none; } }
+.lv-jump { font-family: var(--mono); font-weight: 700; font-size: 26px; }
+.lv-jump span { color: var(--dim); }
+.burst { position: relative; width: 120px; height: 120px; display: grid; place-items: center; }
+.burst::before, .burst::after { content: ""; position: absolute; inset: 0; border: 2px solid var(--glow); border-radius: 50%; animation: ring 1.6s ease-out infinite; }
+.burst::after { animation-delay: .8s; }
+.gold .burst::before, .gold .burst::after { border-color: var(--gold); }
+@keyframes ring { from { transform: scale(.5); opacity: .9; } to { transform: scale(1.5); opacity: 0; } }
+.rewards { display: flex; flex-direction: column; gap: 6px; width: 100%; font-family: var(--mono); font-size: 13.5px; }
+.rewards div { display: flex; justify-content: space-between; gap: 10px; padding: 7px 10px; border: 1px solid rgba(77,180,255,.18); background: rgba(4,10,20,.5); text-align: left; }
+.rewards b { color: var(--gold); white-space: nowrap; }
+.form { display: flex; flex-direction: column; gap: 12px; }
+.form label { display: flex; flex-direction: column; gap: 5px; font-size: 13.5px; }
+.form label span { color: var(--dim); font-size: 12.5px; }
+h2.step { font-family: var(--display); font-size: 17px; font-weight: 600; margin: 0; text-wrap: balance; }
+p { margin: 0; }
+
+/* tap mode */
+.tapzone { position: fixed; inset: 0; z-index: 30; background: #030710; display: flex; flex-direction: column; user-select: none; -webkit-user-select: none;
+  padding: calc(16px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) calc(16px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); gap: 12px; }
+.tap-pad { flex: 1; border: 1px solid var(--line); background: radial-gradient(circle at 50% 50%, rgba(40,120,255,.2), transparent 65%); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; width: 100%; }
+.tap-pad:active { background: radial-gradient(circle at 50% 50%, rgba(77,180,255,.45), transparent 70%); }
+.tap-num { font-family: var(--mono); font-weight: 700; font-size: clamp(90px, 34vw, 150px); line-height: 1; color: var(--glow); text-shadow: 0 0 30px var(--glow-soft); font-variant-numeric: tabular-nums; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}
+</style>
+
+<div id="app"></div>
+<nav class="tabs" id="tabs" hidden><div class="tabs-in" role="tablist">
+  <button class="tab" role="tab" data-tab="quest" id="tab-quest">Quest</button>
+  <button class="tab" role="tab" data-tab="status" id="tab-status">Status</button>
+  <button class="tab" role="tab" data-tab="log" id="tab-log">Log</button>
+  <button class="tab" role="tab" data-tab="system" id="tab-system">System</button>
+</div></nav>
+<div id="toasts" aria-live="polite"></div>
+<div id="layer"></div>
+
+<script>
+/*ENGINE*/
+</script>
+<script>
+// ---------- UI layer (browser only). On iOS this part is rewritten; Engine above is reused. ----------
+(() => {
+  const KEY = 'dailyquest.v1';
+  const $ = s => document.querySelector(s);
+  const app = $('#app'), layer = $('#layer'), toasts = $('#toasts'), tabs = $('#tabs');
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = (id, n) => id === 'run' ? (Math.round(n * 100) / 100).toString() : String(Math.round(n));
+  const unit = id => id === 'run' ? ' km' : '';
+
+  let state = null, tab = 'quest', storageOk = true, queue = [], modalOpen = false, confirmReset = false;
+
+  function load() {
+    try { const raw = localStorage.getItem(KEY); if (raw) { const s = JSON.parse(raw); if (s && s.v === Engine.VERSION) return s; } }
+    catch (e) { storageOk = false; }
+    return null;
+  }
+  function save() {
+    try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { storageOk = false; }
+  }
+  const now = () => new Date(Date.now() + ((state && state.debugOffset) || 0) * 86400000);
+  const todayKey = () => Engine.dayKey(now());
+
+  function toast(text, cls) {
+    const el = document.createElement('div');
+    el.className = 'toast ' + (cls || '');
+    el.textContent = text;
+    toasts.appendChild(el);
+    setTimeout(() => el.remove(), 2300);
+  }
+  function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
+
+  // ---------- events from the engine ----------
+  function handle(events) {
+    for (const e of events) {
+      if (e.type === 'xp' && e.amount > 0) toast('+' + e.amount + ' XP');
+      else if (e.type === 'quest') { toast(e.name + ' complete  ' + e.stat + ' +1', 'ok'); buzz(40); }
+      else if (e.type === 'title') toast('Title unlocked: ' + e.name, 'gold');
+      else if (e.type === 'clear' || e.type === 'level' || e.type === 'penalty') queue.push(e);
+    }
+    // merge several level-ups into one screen
+    const lv = queue.filter(e => e.type === 'level');
+    if (lv.length > 1) {
+      const last = lv[lv.length - 1];
+      last.rankUp = lv.some(e => e.rankUp);
+      last.from = lv[0].level - 1;
+      queue = queue.filter(e => e.type !== 'level' || e === last);
+    }
+    nextModal();
+  }
+
+  function nextModal() {
+    if (modalOpen || !queue.length) return;
+    const e = queue.shift();
+    modalOpen = true;
+    if (e.type === 'clear') {
+      const t = e.next;
+      layer.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><div class="win center">
+        <div class="label">Daily quest</div>
+        <h2 class="big-word">CLEARED</h2>
+        <div class="rewards">
+          <div><span>Clear bonus</span><b>+${e.bonus} XP</b></div>
+          <div><span>Streak</span><b>${e.streak} day${e.streak === 1 ? '' : 's'}</b></div>
+          <div><span>Tomorrow</span><b>${t.pushups} / ${t.situps} / ${t.squats} / ${t.run} km</b></div>
+        </div>
+        <p class="note">${e.full ? 'That was the full routine. You have reached the limit, now hold it.' : 'Your quest grows a little each day you clear it.'}</p>
+        <button class="btn primary" data-act="close-modal" id="modal-ok" style="width:100%">Claim</button>
+      </div></div>`;
+      buzz([60, 40, 120]);
+    } else if (e.type === 'level') {
+      const from = e.from || e.level - 1;
+      layer.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><div class="win center ${e.rankUp ? 'gold' : ''}">
+        <div class="burst"><div class="emblem-wrap"><div class="emblem">${e.rank}</div></div></div>
+        <h2 class="big-word">${e.rankUp ? 'RANK UP' : 'LEVEL UP'}</h2>
+        <div class="lv-jump"><span>Lv ${from} &rarr;</span> Lv ${e.level}</div>
+        <p class="note">${e.rankUp ? 'You are now a <b>' + e.rank + '-Rank</b> hunter.' : 'Next rank at level <b>' + nextRankAt(e.level) + '</b>.'}</p>
+        <button class="btn primary" data-act="close-modal" id="modal-ok" style="width:100%">Continue</button>
+      </div></div>`;
+      buzz([80, 50, 80, 50, 200]);
+    } else if (e.type === 'penalty') {
+      layer.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><div class="win center warnwin">
+        <div class="label">System notice</div>
+        <h2 class="big-word">QUEST FAILED</h2>
+        <p>${e.missed} day${e.missed === 1 ? '' : 's'} missed. ${e.lostStreak ? 'Your ' + e.lostStreak + '-day streak is gone.' : 'No streak was lost.'}</p>
+        <p class="note">${e.detrained ? 'After a long break your quest was lowered by about 10% so you can rebuild safely.' : 'Your quest stays the same size. Clear it today to start a new streak.'}</p>
+        <button class="btn primary" data-act="close-modal" id="modal-ok" style="width:100%">Get back up</button>
+      </div></div>`;
+    }
+    const ok = $('#modal-ok'); if (ok) ok.focus();
+  }
+  function nextRankAt(level) {
+    const r = Engine.RANKS.find(x => x.min > level);
+    return r ? r.min : 'max';
+  }
+
+  // ---------- screens ----------
+  function hud() {
+    const need = Engine.xpForNext(state.level);
+    const t = Engine.TITLES.find(x => x.id === state.title);
+    return `<header class="hud">
+      <div class="emblem-wrap"><div class="emblem" aria-label="Rank ${Engine.rankFor(state.level)}">${Engine.rankFor(state.level)}</div></div>
+      <div class="hud-main">
+        <div class="hud-top"><span class="pname">${esc(state.name)}</span><span class="plevel">Lv ${state.level}</span></div>
+        <div class="ptitle">${t ? esc(t.name) : 'No title'}</div>
+        <div class="bar"><i style="width:${Math.min(100, state.xp / need * 100)}%"></i></div>
+        <div class="xpline"><span>XP</span><span>${state.xp} / ${need}</span></div>
+      </div>
+    </header>`;
+  }
+
+  function countdown() {
+    const n = now(), end = new Date(n.getFullYear(), n.getMonth(), n.getDate() + 1);
+    const m = Math.max(0, Math.round((end - n) / 60000));
+    return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
+  }
+
+  function questScreen() {
+    const day = Engine.today(state);
+    const rows = Engine.QUESTS.map(q => {
+      const p = day.progress[q.id], t = day.targets[q.id], done = day.done[q.id];
+      const pct = Math.min(100, p / t * 100);
+      const isRun = q.id === 'run';
+      const btns = isRun
+        ? `<button class="btn grow" data-act="add" data-id="run" data-n="0.5">+0.5</button>
+           <button class="btn grow" data-act="add" data-id="run" data-n="1">+1</button>`
+        : `<button class="btn grow" data-act="add" data-id="${q.id}" data-n="1">+1</button>
+           <button class="btn grow" data-act="add" data-id="${q.id}" data-n="5">+5</button>
+           <button class="btn grow" data-act="add" data-id="${q.id}" data-n="10">+10</button>
+           <button class="btn grow" data-act="tap" data-id="${q.id}">Tap</button>`;
+      return `<div class="quest ${done ? 'done' : ''}">
+        <div class="q-top">
+          <span class="q-name">${q.name}<span class="q-stat">${q.stat}</span></span>
+          <span class="q-count">${fmt(q.id, p)}<small> / ${fmt(q.id, t)}${unit(q.id)}</small></span>
+        </div>
+        <div class="bar ${done ? 'ok' : ''}"><i style="width:${pct}%"></i></div>
+        <div class="q-btns">${btns}
+          <div class="addrow">
+            <input class="field" id="in-${q.id}" inputmode="${isRun ? 'decimal' : 'numeric'}" placeholder="${isRun ? 'km' : 'reps'}" aria-label="${q.name} amount">
+            <button class="btn" data-act="add-custom" data-id="${q.id}">Add</button>
+          </div>
+        </div>
+        ${done ? '<div class="q-done">&#10003; COMPLETE</div>' : ''}
+      </div>`;
+    }).join('');
+    const left = Engine.QUESTS.filter(q => !day.done[q.id]).length;
+    const bonus = Engine.TUNING.clearBonus + Engine.TUNING.streakBonusPerDay * Math.min(state.streak + 1, 10);
+    return `<section class="win">
+      <div class="win-head">
+        <div><h1 class="win-title">Daily Quest</h1><div class="win-sub">Forge the body. Resets in <span id="cd">${countdown()}</span>.</div></div>
+        <span class="chip ${state.streak ? 'hot' : ''}">Streak ${state.streak}</span>
+      </div>
+      ${day.cleared ? '<div class="cleared-banner">QUEST CLEARED. Rest, or log extra work.</div>' : ''}
+      <div class="quests">${rows}</div>
+      <div class="row">
+        <span class="note">${day.cleared ? 'Earned today: <b>' + day.xp + ' XP</b>' : left + ' left. Clear all four for <b>+' + bonus + ' XP</b>.'}</span>
+        <button class="btn ghost" data-act="undo" ${day.log.length ? '' : 'disabled'}>Undo last</button>
+      </div>
+    </section>`;
+  }
+
+  function statusScreen() {
+    const st = Engine.stats(state), maxStat = Math.max(20, ...Object.values(st));
+    const rank = Engine.rankFor(state.level);
+    const statRows = Engine.QUESTS.map(q => `<div class="stat"><span>${q.stat}</span><div class="bar"><i style="width:${st[q.stat] / maxStat * 100}%"></i></div><span>${st[q.stat]}</span></div>`).join('');
+    const path = Engine.QUESTS.map(q => `<div class="stat"><span>${q.stat}</span><div class="bar"><i style="width:${state.targets[q.id] / q.max * 100}%"></i></div><span>${fmt(q.id, state.targets[q.id])}/${q.max}</span></div>`).join('');
+    const titles = Engine.TITLES.map(t => {
+      const has = state.titles.includes(t.id), on = state.title === t.id;
+      return `<button class="title-item ${has ? '' : 'locked'} ${on ? 'on' : ''}" data-act="title" data-id="${t.id}" ${has ? '' : 'disabled'}>
+        <span><b>${has ? esc(t.name) : '? ? ?'}</b><small>${esc(t.desc)}</small></span>
+        <span class="tag">${on ? 'EQUIPPED' : has ? 'Equip' : 'Locked'}</span></button>`;
+    }).join('');
+    return `<section class="win">
+      <div class="win-head"><div><h1 class="win-title">Status</h1><div class="win-sub">${rank}-Rank hunter. Next rank at level ${nextRankAt(state.level)}.</div></div></div>
+      <div class="status-top">
+        <div class="emblem-wrap"><div class="emblem big">${rank}</div></div>
+        <div class="kv" style="flex:1">
+          <div><span class="label">Level</span><b>${state.level}</b></div>
+          <div><span class="label">Streak</span><b>${state.streak}</b></div>
+          <div><span class="label">Best</span><b>${state.best}</b></div>
+        </div>
+      </div>
+      <div class="stack"><div class="label">Stats. +1 each time you finish that exercise.</div>${statRows}</div>
+      <div class="stack"><div class="label">Road to the full routine</div>${path}
+        <p class="note">Tomorrow's quest: <b>${state.targets.pushups}</b> push-ups, <b>${state.targets.situps}</b> sit-ups, <b>${state.targets.squats}</b> squats, <b>${state.targets.run} km</b>.</p></div>
+      <div class="stack"><div class="label">Titles ${state.titles.length} / ${Engine.TITLES.length}</div><div class="titles">${titles}</div></div>
+    </section>`;
+  }
+
+  function logScreen() {
+    const tk = todayKey(), d = Engine.parseKey(tk);
+    const mondayOffset = (d.getDay() + 6) % 7;
+    const start = Engine.addDays(tk, -mondayOffset - 28);
+    let cells = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map(x => `<div class="dow">${x}</div>`).join('');
+    for (let i = 0; i < 35; i++) {
+      const k = Engine.addDays(start, i), day = state.days[k], future = k > tk;
+      const any = day && Engine.QUESTS.some(q => day.progress[q.id] > 0);
+      const cls = future ? 'future' : day && day.cleared ? 'clear' : any ? 'part' : '';
+      cells += `<div class="cell ${cls} ${k === tk ? 'today' : ''}" title="${k}">${Number(k.slice(8))}</div>`;
+    }
+    const tot = state.totals;
+    return `<section class="win">
+      <div class="win-head"><div><h1 class="win-title">Log</h1><div class="win-sub">The last five weeks.</div></div><span class="chip">${state.clears} clears</span></div>
+      <div class="cal">${cells}</div>
+      <div class="legend"><span><i style="background:#1e6fe0"></i>Cleared</span><span><i style="background:rgba(77,180,255,.16)"></i>Started</span><span><i></i>Nothing logged</span></div>
+      <div class="stack"><div class="label">Lifetime</div>
+        <div class="kv">
+          <div><span class="label">Push-ups</span><b>${tot.pushups}</b></div>
+          <div><span class="label">Sit-ups</span><b>${tot.situps}</b></div>
+          <div><span class="label">Squats</span><b>${tot.squats}</b></div>
+          <div><span class="label">Run km</span><b>${fmt('run', tot.run)}</b></div>
+          <div><span class="label">Total XP</span><b>${state.totalXp}</b></div>
+          <div><span class="label">Since</span><b style="font-size:13px;line-height:1.9">${state.created.slice(5)}</b></div>
+        </div></div>
+    </section>`;
+  }
+
+  function systemScreen() {
+    return `<section class="win">
+      <div class="win-head"><div><h1 class="win-title">System</h1><div class="win-sub">Player settings.</div></div></div>
+      <div class="form">
+        <label>Hunter name<div class="addrow"><input class="field" id="in-name" maxlength="20" value="${esc(state.name)}"><button class="btn" data-act="rename">Save</button></div></label>
+        <button class="btn" data-act="retest">Retake the fitness test</button>
+        <p class="note">Retaking the test resizes your daily quest. Level, XP and titles are kept.</p>
+      </div>
+      <div class="stack"><div class="label">Testing tools</div>
+        <button class="btn" data-act="skip">Skip to tomorrow</button>
+        <p class="note">For trying the prototype only. Moves the game clock forward one day${state.debugOffset ? ' (currently <b>+' + state.debugOffset + '</b>)' : ''}. A skipped day with an unfinished quest counts as missed.</p>
+        ${state.debugOffset ? '<button class="btn ghost" data-act="unskip">Return to the real date</button>' : ''}
+      </div>
+      <div class="stack"><div class="label">Data</div>
+        <p class="note">${storageOk ? 'Progress is saved in this browser on this device only.' : '<b>This browser is blocking storage, so progress will be lost when you close the page.</b>'}</p>
+        <button class="btn danger" data-act="reset">${confirmReset ? 'Tap again to erase everything' : 'Erase all progress'}</button>
+      </div>
+    </section>`;
+  }
+
+  function render() {
+    if (!state) { tabs.hidden = true; app.innerHTML = ''; onboarding(); return; }
+    tabs.hidden = false;
+    document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab));
+    const body = tab === 'quest' ? questScreen() : tab === 'status' ? statusScreen() : tab === 'log' ? logScreen() : systemScreen();
+    app.innerHTML = hud() + body;
+  }
+
+  // ---------- onboarding / fitness test ----------
+  function testForm(prefill) {
+    const p = prefill || {};
+    const f = (id, label, hint, mode) => `<label>${label}<span>${hint}</span><input class="field" id="t-${id}" inputmode="${mode}" placeholder="0" value="${p[id] != null ? esc(p[id]) : ''}"></label>`;
+    return f('pushups', 'Push-ups in one go', 'Without stopping, with good form.', 'numeric')
+      + f('situps', 'Sit-ups in one go', 'Without stopping.', 'numeric')
+      + f('squats', 'Bodyweight squats in one go', 'Without stopping.', 'numeric')
+      + f('run', 'Longest run right now, in km', 'Without walking. Enter 0 if you do not run yet.', 'decimal');
+  }
+  function readTest() {
+    const num = id => { const v = parseFloat(String($('#t-' + id).value).replace(',', '.')); return isFinite(v) && v > 0 ? v : 0; };
+    return { pushups: num('pushups'), situps: num('situps'), squats: num('squats'), run: num('run') };
+  }
+  function onboarding() {
+    modalOpen = true;
+    layer.innerHTML = `<div class="overlay"><div class="win">
+      <div class="win-head"><div><h1 class="win-title">System</h1><div class="win-sub">You have qualified as a Player.</div></div><span class="chip">Rank E</span></div>
+      <p>Every day the System gives you one quest: push-ups, sit-ups, squats and a run. Clear it to earn XP, level up and climb from E-Rank to S-Rank. The goal is <b>100 / 100 / 100 / 5 km</b>, but you start at your own level.</p>
+      <div class="form">
+        <label>Hunter name<input class="field" id="t-name" maxlength="20" placeholder="Player" autocomplete="off"></label>
+        <h2 class="step">Fitness test: what can you do today?</h2>
+        ${testForm()}
+        <p class="note">Honest numbers give a quest you can actually clear. Guessing is fine, you can retake this later.</p>
+        <button class="btn primary" data-act="begin">Accept the quest</button>
+      </div>
+    </div></div>`;
+  }
+  function retestModal() {
+    modalOpen = true;
+    layer.innerHTML = `<div class="overlay" role="dialog" aria-modal="true"><div class="win">
+      <div class="win-head"><div><h1 class="win-title">Fitness test</h1><div class="win-sub">What can you do today?</div></div></div>
+      <div class="form">${testForm(state.test)}
+        <button class="btn primary" data-act="retest-save">Resize my quest</button>
+        <button class="btn ghost" data-act="close-modal">Cancel</button>
+      </div></div></div>`;
+  }
+
+  // ---------- tap mode ----------
+  let tapId = null, tapCount = 0;
+  function tapMode(id) {
+    tapId = id; tapCount = 0;
+    const q = Engine.QUESTS.find(x => x.id === id), day = Engine.today(state);
+    layer.innerHTML = `<div class="tapzone">
+      <div class="row"><span class="win-title" style="font-size:16px">${q.name}</span><span class="chip">${fmt(id, day.progress[id])} / ${day.targets[id]} so far</span></div>
+      <button class="tap-pad" data-act="tap-hit" id="tap-pad" aria-label="Count one rep">
+        <span class="tap-num" id="tap-num">0</span>
+        <span class="note">Tap anywhere for each rep. Put the phone under your chest and tap with your nose.</span>
+      </button>
+      <div class="row"><button class="btn ghost" data-act="tap-cancel">Cancel</button><button class="btn primary" data-act="tap-done" style="flex:1">Log reps</button></div>
+    </div>`;
+  }
+
+  // ---------- actions ----------
+  function add(id, n) {
+    const ev = Engine.addProgress(state, id, n);
+    save(); render(); handle(ev);
+  }
+  function tick() {
+    if (!state) return;
+    const ev = Engine.ensureDay(state, todayKey());
+    if (ev.length || !state.days[todayKey()]) { save(); }
+    if (ev.length) { render(); handle(ev); }
+    else { const cd = $('#cd'); if (cd) cd.textContent = countdown(); }
+  }
+
+  document.addEventListener('click', e => {
+    const tb = e.target.closest('.tab');
+    if (tb) { tab = tb.dataset.tab; confirmReset = false; render(); window.scrollTo(0, 0); return; }
+    const el = e.target.closest('[data-act]');
+    if (!el) return;
+    const act = el.dataset.act, id = el.dataset.id;
+    if (act === 'add') { buzz(10); add(id, parseFloat(el.dataset.n)); }
+    else if (act === 'add-custom') {
+      const inp = $('#in-' + id), v = parseFloat(String(inp.value).replace(',', '.'));
+      if (isFinite(v) && v > 0) add(id, v); else { inp.focus(); toast('Enter a number first'); }
+    }
+    else if (act === 'undo') { const u = Engine.undo(state); if (u) { save(); render(); toast('Undid ' + fmt(u.id, u.amount) + unit(u.id) + ' (-' + u.xp + ' XP)'); } }
+    else if (act === 'tap') tapMode(id);
+    else if (act === 'tap-hit') { tapCount++; $('#tap-num').textContent = tapCount; buzz(12); }
+    else if (act === 'tap-cancel') { layer.innerHTML = ''; }
+    else if (act === 'tap-done') { layer.innerHTML = ''; if (tapCount > 0) add(tapId, tapCount); }
+    else if (act === 'close-modal') { layer.innerHTML = ''; modalOpen = false; nextModal(); }
+    else if (act === 'begin') {
+      const name = $('#t-name').value, test = readTest();
+      state = Engine.newPlayer(name, test, Engine.dayKey(new Date()));
+      save(); layer.innerHTML = ''; modalOpen = false; tab = 'quest'; render();
+      toast('Title unlocked: The Awakened', 'gold');
+    }
+    else if (act === 'retest') retestModal();
+    else if (act === 'retest-save') {
+      const t = Engine.retest(state, readTest());
+      save(); layer.innerHTML = ''; modalOpen = false; tab = 'quest'; render();
+      toast('New quest: ' + t.pushups + ' / ' + t.situps + ' / ' + t.squats + ' / ' + t.run + ' km', 'ok');
+    }
+    else if (act === 'title') { state.title = id; save(); render(); }
+    else if (act === 'rename') { const v = $('#in-name').value.trim().slice(0, 20); if (v) { state.name = v; save(); render(); toast('Name saved', 'ok'); } }
+    else if (act === 'skip') { state.debugOffset = (state.debugOffset || 0) + 1; tab = 'quest'; const ev = Engine.ensureDay(state, todayKey()); save(); render(); toast('Day advanced'); handle(ev); }
+    else if (act === 'unskip') { state.debugOffset = 0; Engine.ensureDay(state, todayKey()); save(); render(); }
+    else if (act === 'reset') {
+      if (!confirmReset) { confirmReset = true; render(); return; }
+      confirmReset = false; state = null; queue = [];
+      try { localStorage.removeItem(KEY); } catch (err) {}
+      render();
+    }
+  });
+  document.addEventListener('keydown', e => {
+    if (e.key !== 'Enter' || !e.target.id) return;
+    if (e.target.id.startsWith('in-') && e.target.id !== 'in-name') {
+      const b = document.querySelector('[data-act="add-custom"][data-id="' + e.target.id.slice(3) + '"]'); if (b) b.click();
+    }
+  });
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) tick(); });
+  setInterval(tick, 30000);
+
+  state = load();
+  if (state) { const ev = Engine.ensureDay(state, todayKey()); save(); render(); handle(ev); }
+  else render();
+})();
+</script>

@@ -1,0 +1,69 @@
+{
+ "ranks": {
+  "e": "rank-e.webp",
+  "d": "rank-d.webp",
+  "c": "rank-c.webp",
+  "b": "rank-b.webp",
+  "a": "rank-a.webp",
+  "s": "rank-s.webp"
+ },
+ "objects": {
+  "chest-closed": "chest-closed.webp",
+  "chest-open": "chest-open.webp",
+  "essence": "essence.webp",
+  "flame": "flame.webp",
+  "token": "token.webp",
+  "rune": "rune.webp"
+ },
+ "hero": "hero.webp",
+ "aura": "aura.webp",
+ "banner": "banner.webp",
+ "bg": "bg.webp",
+ "glyphs": {
+  "file": "glyphs.webp",
+  "cols": 5,
+  "rows": 4,
+  "cell": 128,
+  "order": [
+   "pushups",
+   "situps",
+   "squats",
+   "run",
+   "str",
+   "end",
+   "agi",
+   "quest",
+   "hunter",
+   "log",
+   "hall",
+   "system",
+   "lock",
+   "clear",
+   "skull",
+   "trial",
+   "shield",
+   "rest",
+   "time",
+   "star"
+  ]
+ },
+ "bytes": {
+  "rank-e.webp": 29950,
+  "rank-d.webp": 50902,
+  "rank-c.webp": 41852,
+  "rank-b.webp": 49432,
+  "rank-a.webp": 51600,
+  "rank-s.webp": 64192,
+  "chest-closed.webp": 51248,
+  "chest-open.webp": 61424,
+  "essence.webp": 19730,
+  "flame.webp": 14858,
+  "token.webp": 19546,
+  "rune.webp": 12542,
+  "hero.webp": 110288,
+  "glyphs.webp": 35730,
+  "aura.webp": 115926,
+  "banner.webp": 91654,
+  "bg.webp": 6154
+ }
+}
