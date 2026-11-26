@@ -59,7 +59,14 @@ async function test(name, fn) {
     await page.goto(URL);
     return { ctx, page, errors };
   }
-  const text = (page, sel) => page.locator(sel).first().innerText();
+  // A number that changed counts its way to the new value, so a reading waits until it has arrived.
+  const settled = page => page.waitForFunction(() => !document.querySelector('[data-rolling]'), null, { timeout: 3000 });
+  const text = async (page, sel) => { await settled(page); return page.locator(sel).first().innerText(); };
+  // A tab slides its screen in. The new screen is there, and takes taps, once the slide is over.
+  const tabTo = async (page, t) => {
+    await page.click('.tab[data-tab="' + t + '"]');
+    await page.waitForFunction(t => document.querySelector('#app').dataset.tab === t && !document.documentElement.classList.contains('vt'), t);
+  };
   const stateOf = page => page.evaluate(() => JSON.parse(localStorage.getItem('dailyquest.v2')));
   const noSideScroll = async (page, where) => {
     const o = await page.evaluate(() => ({ sw: document.documentElement.scrollWidth, cw: document.documentElement.clientWidth }));
@@ -73,9 +80,12 @@ async function test(name, fn) {
   }
   const act = (page, a, id) => page.click('#app [data-act="' + a + '"]' + (id ? '[data-id="' + id + '"]' : ''));
   const layerAct = (page, a) => page.click('#layer [data-act="' + a + '"]');
-  // The quest list shows the buttons of one task at a time. This opens a task's row unless it is open already.
+  // The quest list shows the buttons of one task at a time (the others are folded away). This opens a task's row
+  // unless it is open already. A finished task stays open for a moment before the next one opens by itself, so the
+  // tap is checked and made again if the two crossed.
   const openRow = page => page.locator('#app .quest.act:not(.pen)').evaluateAll(els => (els[0] ? els[0].dataset.id : null));
-  const pick = async (page, id) => { if ((await openRow(page)) !== id) await page.click('#app .quest[data-id="' + id + '"]'); };
+  const pick = async (page, id) => { for (let i = 0; i < 3 && (await openRow(page)) !== id; i++) await page.click('#app .quest[data-id="' + id + '"] .q-head'); };
+  const usable = '#app .q-more:not([inert]) ';
   // Closes the window that is open. The CLEARED window keeps its Claim button in the chest, so that is opened first.
   const openChest = page => page.click('#layer .btn[data-act="chest-open"]');
   async function closeOne(page) {
@@ -144,11 +154,11 @@ async function test(name, fn) {
   await test('the quest list opens one task at a time', async () => {
     const p = A.page;
     assert.equal(await openRow(p), 'pushups', 'the first unfinished task should be open');
-    assert.equal(await p.locator('#app .q-btns').count(), 1);
-    await p.click('#app .quest[data-id="squats"]');
+    assert.equal(await p.locator(usable + '.q-btns').count(), 1);
+    await p.click('#app .quest[data-id="squats"] .q-head');
     assert.equal(await openRow(p), 'squats');
-    assert.equal(await p.locator('#app .q-btns').count(), 1);
-    assert.equal(await p.locator('#app [data-act="add"][data-id="pushups"]').count(), 0);
+    assert.equal(await p.locator(usable + '.q-btns').count(), 1);
+    assert.equal(await p.locator(usable + '[data-act="add"][data-id="pushups"]').count(), 0);
     await p.click('#app .quest[data-id="squats"] .q-head'); // a tap on the open row folds it
     assert.equal(await openRow(p), null);
     await pick(p, 'pushups');
@@ -185,7 +195,8 @@ async function test(name, fn) {
     let s = await stateOf(p);
     assert.equal(s.pace.best, 324);
     assert.equal(await p.locator('#app .quest.done[data-id="run"] .stamp').count(), 1, 'a finished task is stamped');
-    assert.equal(await openRow(p), 'pushups', 'the list should move on to the first task that is still open');
+    assert.equal(await openRow(p), 'run', 'a finished task stays open for a moment');
+    await p.waitForFunction(() => (document.querySelector('#app .quest.act:not(.pen)') || {}).dataset.id === 'pushups', null, { timeout: 2500 }); // then the list moves on to the first task that is still open
     const seen = [], before = s.essence;
     await logAll(p, 1, seen);
     await p.waitForSelector('#layer .big-word');
@@ -217,7 +228,7 @@ async function test(name, fn) {
     for (const w of [400, 360]) {
       await p.setViewportSize({ width: w, height: 800 });
       for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) {
-        await p.click('.tab[data-tab="' + t + '"]');
+        await tabTo(p, t);
         await noSideScroll(p, t + ' at ' + w);
         if (t === 'hunter') for (const s of ['titles', 'skills', 'shop', 'card']) { await act(p, 'sub', s); await noSideScroll(p, 'hunter/' + s + ' at ' + w); }
       }
@@ -238,18 +249,18 @@ async function test(name, fn) {
   console.log('Days, penalties, hard mode');
   await test('the test clock: a missed day brings a Penalty Quest with a plank', async () => {
     const p = A.page;
-    await p.click('.tab[data-tab="quest"]');
+    await tabTo(p, 'quest');
     await pick(p, 'squats'); // a row left open on the day before
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip');
     await p.waitForSelector('#layer .big-word');
     assert.equal(await text(p, '#layer .big-word'), 'NEW DAY'); // yesterday was cleared
     await closeModals(p);
     assert.match(await text(p, '.testbar'), /\+1 day/);
     assert.equal(await openRow(p), 'pushups', 'a new day starts at its first task');
-    await p.click('#app .quest[data-id="situps"]');
+    await p.click('#app .quest[data-id="situps"] .q-head');
     assert.equal(await openRow(p), 'situps', 'and the first tap on another task opens it');
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip'); // nothing logged on the skipped day
     await p.waitForSelector('#layer .big-word');
     assert.equal(await text(p, '#layer .big-word'), 'PENALTY QUEST');
@@ -273,7 +284,7 @@ async function test(name, fn) {
 
   await test('Hard mode: on with a confirm, a failed penalty costs a level, off waits for the streak', async () => {
     const p = A.page;
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'hard-on');
     await layerAct(p, 'hard-go');
     let s = await stateOf(p);
@@ -285,11 +296,11 @@ async function test(name, fn) {
     await act(p, 'hard-keep');
     const level = s.level;
     await act(p, 'skip'); await closeModals(p);            // penalty day cleared: streak 2
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip');                                  // a missed day
     assert.equal(await text(p, '#layer .big-word'), 'PENALTY QUEST');
     await closeModals(p);
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip');                                  // the penalty quest ignored
     await p.waitForSelector('#layer .big-word');
     assert.equal(await text(p, '#layer .big-word'), 'STREAK BROKEN');
@@ -345,7 +356,7 @@ async function test(name, fn) {
     st = await stateOf(p);
     assert.equal(st.days[st.lastDay].kind, 'quest');
     // skills
-    await p.click('.tab[data-tab="hunter"]'); await act(p, 'sub', 'skills');
+    await tabTo(p, 'hunter'); await act(p, 'sub', 'skills');
     await act(p, 'skill-on', 'splitFocus');
     await act(p, 'skill-on', 'earlyRiser');
     st = await stateOf(p);
@@ -361,10 +372,10 @@ async function test(name, fn) {
     await act(p, 'sub', 'card');
     await p.click('#app [data-act="aura"][data-id="1"]');
     st = await stateOf(p); assert.equal(st.aura, 1);
-    await p.click('.tab[data-tab="hall"]');
-    await p.click('.tab[data-tab="log"]');
+    await tabTo(p, 'hall');
+    await tabTo(p, 'log');
     // Split Focus on the quest screen, and the next trial
-    await p.click('.tab[data-tab="quest"]');
+    await tabTo(p, 'quest');
     await pick(p, 'run');
     await act(p, 'focus', 'run');
     st = await stateOf(p); assert.equal(st.days[st.lastDay].focus, 'run');
@@ -373,7 +384,7 @@ async function test(name, fn) {
       await layerAct(p, 'trial-go');
       st = await stateOf(p); assert.ok(st.days[st.lastDay].trial);
     }
-    for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) { await p.click('.tab[data-tab="' + t + '"]'); await noSideScroll(p, 'seeded ' + t); }
+    for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) { await tabTo(p, t); await noSideScroll(p, 'seeded ' + t); }
     assert.deepEqual(B.errors, []);
     await B.ctx.close();
   });
@@ -423,14 +434,14 @@ async function test(name, fn) {
     assert.ok(seen.includes('RANK UP'), 'saw ' + seen.join(', '));
     let st = await stateOf(p);
     assert.equal(st.rank, 1);
-    await p.click('.tab[data-tab="hunter"]');
+    await tabTo(p, 'hunter');
     assert.ok(await p.locator('.swatch').count() >= 3); // auto, Ash, Verdant
     await act(p, 'sub', 'skills');
     await act(p, 'skill-on', 'secondWind');
     st = await stateOf(p);
     assert.deepEqual(st.skills, ['secondWind']);
     // undo takes the rank back with the set that earned it
-    await p.click('.tab[data-tab="quest"]');
+    await tabTo(p, 'quest');
     await act(p, 'undo');
     st = await stateOf(p);
     assert.equal(st.rank, 0);
@@ -448,12 +459,12 @@ async function test(name, fn) {
     await p.fill('#in-pushups', '7');
     await p.click('#app [data-act="add"][data-id="pushups"][data-n="5"]');
     assert.equal(await p.inputValue('#in-pushups'), '7', 'a typed amount should survive a redraw');
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'pause-on');
-    await p.click('.tab[data-tab="quest"]');
+    await tabTo(p, 'quest');
     assert.equal(await text(p, '.win-title'), 'QUEST PAUSED');
     assert.equal(await p.locator('.quests').count(), 0);
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip');
     assert.equal(await p.locator('#layer .big-word').count(), 0, 'a paused day should not raise a report');
     let st = await stateOf(p);
@@ -476,7 +487,7 @@ async function test(name, fn) {
     await p.waitForSelector('.quests');
     let st = await stateOf(p);
     assert.deepEqual(st.targets, { pushups: 20, situps: 20, squats: 30, run: 1.5 });
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'retest');
     assert.equal(await p.inputValue('#t-pushups'), '8');
     await p.fill('#t-pushups', '45');
@@ -507,7 +518,7 @@ async function test(name, fn) {
     await layerAct(p, 'begin');
     await p.waitForSelector('.quests');
     assert.match(await text(p, '#q-hint'), /You awakened today/);
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip'); // nothing logged on day one
     await p.waitForSelector('#layer .big-word');
     assert.equal(await text(p, '#layer .big-word'), 'NEW DAY');
@@ -515,10 +526,10 @@ async function test(name, fn) {
     await closeModals(p);
     assert.equal(await p.locator('.quest.pen').count(), 0);
     assert.match(await text(p, '#q-hint'), /A missed day means a Penalty Quest tomorrow/);
-    await p.click('.tab[data-tab="log"]');
+    await tabTo(p, 'log');
     await act(p, 'day', (await stateOf(p)).graceDay);
     assert.match(await text(p, '#app .rewards'), /Day of the Awakening Test\s+No penalty/);
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'skip'); // nothing logged on day two either
     await p.waitForSelector('#layer .big-word');
     assert.equal(await text(p, '#layer .big-word'), 'PENALTY QUEST');
@@ -541,7 +552,7 @@ async function test(name, fn) {
     const d = cloudDoc(), s = await stateOf(p);
     assert.equal(d.sid, s.sid); assert.equal(d.rev, s.rev); assert.equal(d.xp, s.totalXp);
     assert.ok(await p.evaluate(() => window.__sets) <= 3, 'too many writes');
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     assert.match(await text(p, '#sync-line'), /Cloud save is on/);
   });
 
@@ -560,7 +571,7 @@ async function test(name, fn) {
     await pick(p2, 'squats');
     await p2.click('#app [data-act="add"][data-id="squats"][data-n="10"]');
     await waitFor(async () => { const s = await stateOf(p1); return s.days[s.lastDay].progress.squats === 10; }, 'device 1 to follow');
-    await p1.click('.tab[data-tab="quest"]');
+    await tabTo(p1, 'quest');
     assert.match(await text(p1, '.quest:nth-child(3) .q-count'), /^10/);
     const a = await stateOf(p1), b = await stateOf(p2);
     assert.equal(a.rev, b.rev);
@@ -590,13 +601,13 @@ async function test(name, fn) {
   await test('the test clock stays out of the cloud and going back restores the real save', async () => {
     const p1 = D1.page;
     const before = cloudDoc(), real = (s => s.days[s.lastDay].progress.pushups)(await stateOf(p1));
-    await p1.click('.tab[data-tab="system"]');
+    await tabTo(p1, 'system');
     await act(p1, 'skip'); await closeModals(p1);
     await pick(p1, 'pushups');
     await p1.click('#app [data-act="add"][data-id="pushups"][data-n="10"]');
     await p1.waitForTimeout(2500);
     assert.equal(cloudDoc().rev, before.rev, 'a test day reached the cloud');
-    await p1.click('.tab[data-tab="system"]');
+    await tabTo(p1, 'system');
     assert.match(await text(p1, '#sync-line'), /test clock/);
     await act(p1, 'unskip'); await closeModals(p1);
     const s = await stateOf(p1);
@@ -607,11 +618,11 @@ async function test(name, fn) {
   await test('a failed write is retried and does not lose the change', async () => {
     const p1 = D1.page;
     await p1.evaluate(() => { window.__cloudFail = 'unavailable'; });
-    await p1.click('.tab[data-tab="quest"]');
+    await tabTo(p1, 'quest');
     await pick(p1, 'pushups');
     await p1.click('#app [data-act="add"][data-id="pushups"][data-n="1"]');
     await p1.waitForTimeout(2300);
-    await p1.click('.tab[data-tab="system"]');
+    await tabTo(p1, 'system');
     assert.match(await text(p1, '#sync-line'), /cannot be reached/);
     await p1.evaluate(() => { window.__cloudFail = null; });
     const s = await stateOf(p1);
@@ -621,7 +632,7 @@ async function test(name, fn) {
 
   await test('erasing on one device erases the other, and a new player takes over the cloud save', async () => {
     const p1 = D1.page, p2 = D2.page;
-    await p1.click('.tab[data-tab="system"]');
+    await tabTo(p1, 'system');
     await act(p1, 'reset'); await act(p1, 'reset');
     await p1.waitForSelector('#t-name');
     await waitFor(() => cloudDoc().erased === true, 'the tombstone');
@@ -658,7 +669,7 @@ async function test(name, fn) {
     assert.equal(await p.locator('#layer .big-word').count(), 0, 'no stale report should be on screen');
     assert.ok(await p.evaluate(() => !!localStorage.getItem('dailyquest.v2.stash')));
     // The copy that lost can be brought back by hand, and then it is the one the cloud keeps.
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     assert.match(await text(p, '#app .opt'), /Earlier copy on this device/);
     await act(p, 'stash-use'); await act(p, 'stash-use');
     await drain(p);
@@ -675,7 +686,7 @@ async function test(name, fn) {
     const F = await open({ seed: {} });
     await onboard(F.page, { name: 'Local' });
     await layerAct(F.page, 'begin');
-    await F.page.click('.tab[data-tab="system"]');
+    await tabTo(F.page, 'system');
     assert.match(await text(F.page, '#sync-line'), /this browser on this device only/);
     assert.deepEqual(F.errors, []);
     await F.ctx.close();
@@ -687,7 +698,7 @@ async function test(name, fn) {
     await onboard(p, { name: 'Boxed', pushups: 12 });
     await layerAct(p, 'begin');
     await p.waitForSelector('.quests');
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     assert.equal(await p.evaluate(() => typeof window.AppShell), 'undefined'); // the page has no app shell here
     assert.doesNotMatch(await text(p, '#app'), /Check for updates|Home Screen/);
     assert.equal(await p.locator('.tab[data-tab="system"].dot').count(), 0);
@@ -696,11 +707,11 @@ async function test(name, fn) {
     const backup = await p.inputValue('#bk-out');
     assert.equal(JSON.parse(backup).state.name, 'Boxed');
     await layerAct(p, 'close-modal');
-    await p.click('.tab[data-tab="quest"]');
+    await tabTo(p, 'quest');
     for (let i = 0; i < 4; i++) await p.click('#app [data-act="add"][data-id="pushups"][data-n="1"]');
     const played = await stateOf(p);
     await waitFor(() => cloudRev() === played.rev, 'the played copy to reach the cloud');
-    await p.click('.tab[data-tab="system"]');
+    await tabTo(p, 'system');
     await act(p, 'backup-open');
     await p.fill('#bk-text', backup);
     await layerAct(p, 'backup-read');
@@ -756,7 +767,7 @@ async function test(name, fn) {
       if (blank) broken.push(where + ': ' + blank + ' icons without a picture');
     };
     for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) {
-      await p.click('.tab[data-tab="' + t + '"]');
+      await tabTo(p, t);
       await look(t);
       if (t === 'hunter') for (const sub of ['titles', 'skills', 'shop', 'card']) { await act(p, 'sub', sub); await look('hunter/' + sub); }
     }
