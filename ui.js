@@ -3,7 +3,8 @@
   const E = Engine, T = E.TUNING;
   const KEY = 'dailyquest.v2', META = KEY + '.meta', PRETEST = KEY + '.pretest', STASH = KEY + '.stash', V1KEY = 'dailyquest.v1';
   const $ = s => document.querySelector(s);
-  const app = $('#app'), layer = $('#layer'), toasts = $('#toasts'), tabs = $('#tabs');
+  const app = $('#app'), layer = $('#layer'), toasts = $('#toasts'), tabs = $('#tabs'), mini = $('#mini'), ghost = $('#ghost'), root = document.documentElement;
+  const view = $('#view') || document.scrollingElement || root; // the page scrolls in here; the document itself never does
   const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const r2 = n => Math.round(n * 100) / 100;
   const x1 = n => String(Math.round(n * 10) / 10);
@@ -322,23 +323,98 @@
   }
 
   // ---------- motion ----------
-  // The screen is redrawn after every tap, so a bar or a number would jump to its new value. These helpers
-  // remember what was shown last: a bar starts from its old width, and a number that changed gets a bump.
+  // The screen is described as HTML and then patched in place (morph): what stays on screen stays the same element.
+  // A bar slides to its new width, a pressed button springs back, a field keeps its text, focus and keyboard.
+  // Effects are asked for in the HTML (data-fx, data-roll) and played once, right after the patch.
+  // Timing follows one small set of curves, the same ones ui.css names: things arrive fast and settle slowly,
+  // things leave quickly, and only rewards overshoot.
   const calm = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : { matches: false };
-  const shown = {};
-  function moved(key, to, prop) {
-    const from = shown[key];
-    shown[key] = to;
-    return (prop ? 'data-prop="' + prop + '" ' : '') + (from != null && from !== to ? 'data-from="' + from + '" data-to="' + to + '" ' : '');
+  const EASE = { out: 'cubic-bezier(.22, 1, .36, 1)', in: 'cubic-bezier(.55, 0, 1, .45)', inout: 'cubic-bezier(.65, 0, .35, 1)', spring: 'cubic-bezier(.34, 1.56, .64, 1)' };
+  function play(el, frames, o) {
+    if (!el || calm.matches || typeof el.animate !== 'function') return null;
+    try { return el.animate(frames, Object.assign({ duration: 320, easing: EASE.out }, o)); } catch (e) { return null; }
   }
-  const fill = (key, share) => { const w = Math.round(Math.max(0, Math.min(1, share)) * 1000) / 10 + '%'; return `<i ${moved(key, w)}style="width:${w}"></i>`; };
+  // What each screen showed last, so a change can be told apart from a first look.
+  const shown = {};
   const changed = (key, value) => { const was = shown[key]; shown[key] = value; return was != null && was !== value; };
-  function settleMotion(root) {
-    const els = root.querySelectorAll('[data-from]');
-    if (!els.length) return;
-    for (const el of els) { el.style.transition = 'none'; el.style.setProperty(el.dataset.prop || 'width', el.dataset.from); }
-    void root.offsetWidth;
-    for (const el of els) { el.style.transition = ''; el.style.setProperty(el.dataset.prop || 'width', el.dataset.to); }
+  // A number that changed counts its way to the new value. `kind` picks the format. upOnly: going down just jumps.
+  function roll(key, value, kind, upOnly) {
+    const was = shown[key];
+    shown[key] = value;
+    return was != null && was !== value && (!upOnly || value > was) ? ` data-roll="${was}|${value}|${kind || ''}"` : '';
+  }
+  const fill = (key, share) => { const w = Math.round(Math.max(0, Math.min(1, share)) * 1000) / 10 + '%'; return `<i data-key="f-${key}" style="width:${w}"></i>`; };
+
+  // morph: makes `root` look like `html` while keeping every element that can stay. Elements are matched by
+  // data-key (or id) and otherwise by tag in order. Nodes marked data-float are passing decorations and are left alone.
+  const tpl = document.createElement('template');
+  const keyOf = n => n.nodeType === 1 ? n.getAttribute('data-key') || n.id || '' : '';
+  const floating = n => n && n.nodeType === 1 && n.hasAttribute('data-float');
+  const past = n => { while (floating(n)) n = n.nextSibling; return n; };
+  function morph(root, html) { tpl.innerHTML = html; kids(root, tpl.content); }
+  function kids(live, want) {
+    let cur = past(live.firstChild);
+    for (let nb = want.firstChild, next; nb; nb = next) {
+      next = nb.nextSibling;
+      const k = keyOf(nb);
+      let m = null;
+      if (k) { for (let c = cur; c; c = c.nextSibling) if (c.nodeName === nb.nodeName && keyOf(c) === k && !floating(c)) { m = c; break; } }
+      else if (cur && cur.nodeName === nb.nodeName && !keyOf(cur)) m = cur;
+      if (!m) { live.insertBefore(nb, cur); continue; } // a new node moves from the template into the page
+      if (m === cur) cur = past(cur.nextSibling); else live.insertBefore(m, cur);
+      patch(m, nb);
+    }
+    while (cur) { const n = cur.nextSibling; if (!floating(cur)) live.removeChild(cur); cur = n; }
+  }
+  function patch(a, b) {
+    if (a.nodeType !== 1) { if (a.nodeValue !== b.nodeValue) a.nodeValue = b.nodeValue; return; }
+    const focused = a === document.activeElement;
+    for (let i = a.attributes.length - 1; i >= 0; i--) { const n = a.attributes[i].name; if (!b.hasAttribute(n)) a.removeAttribute(n); }
+    for (const at of b.attributes) if (a.getAttribute(at.name) !== at.value) {
+      a.setAttribute(at.name, at.value);
+      if (at.name === 'value' && a.tagName === 'INPUT' && !focused) a.value = at.value; // a saved value replaces what the field shows, unless someone is typing in it
+    }
+    if (a.tagName === 'INPUT' && (a.type === 'checkbox' || a.type === 'radio') && !focused) a.checked = b.hasAttribute('checked');
+    if (a.tagName === 'TEXTAREA') return; // what was typed or pasted stays
+    kids(a, b);
+  }
+
+  // Effects asked for by the HTML. Each plays once and the request is taken off the element.
+  const FX = {
+    bump: el => play(el, [{ transform: 'scale(1.32)', color: token('--g') }, { transform: 'none' }], { duration: 440, easing: EASE.spring }),
+    stamp: el => play(el, [{ opacity: 0, transform: 'rotate(-7deg) scale(2.6)' }, { opacity: 1, transform: 'rotate(-7deg) scale(.9)', offset: .6 }, { opacity: 1, transform: 'rotate(-7deg) scale(1)' }], { duration: 560 }),
+    node: el => play(el.firstElementChild, [{ transform: 'rotate(45deg) scale(.4)' }, { transform: 'rotate(45deg) scale(1.5)', offset: .5 }, { transform: 'rotate(45deg) scale(1)' }], { duration: 620 }),
+    lit: el => play(el, [{ transform: 'scale(.8)', filter: 'brightness(2)' }, { transform: 'scale(1.12)', offset: .45 }, { transform: 'none', filter: 'none' }], { duration: 700 }),
+    enter: el => play(el, [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 360 }),
+  };
+  function runFx(root) {
+    for (const el of root.querySelectorAll('[data-roll]')) {
+      const [from, to, kind] = el.getAttribute('data-roll').split('|');
+      el.removeAttribute('data-roll');
+      rollTo(el, Number(from), Number(to), kind);
+    }
+    for (const el of root.querySelectorAll('[data-fx]')) {
+      const list = el.getAttribute('data-fx').split(' ');
+      el.removeAttribute('data-fx');
+      for (const n of list) if (FX[n]) FX[n](el);
+    }
+  }
+  const SHOW = { run: n => String(r2(n)), pct: n => Math.round(n) + '%', num: n => num(n) };
+  function rollTo(el, from, to, kind) {
+    if (calm.matches || !isFinite(from) || !isFinite(to)) return;
+    const show = SHOW[kind] || (n => String(Math.round(n)));
+    const end = el.textContent, ms = Math.min(720, 300 + Math.abs(to - from) * 14), mark = {};
+    el._roll = mark;
+    el.setAttribute('data-rolling', ''); // marks a number on its way, for anything that reads the screen
+    const t0 = performance.now();
+    const step = t => {
+      if (el._roll !== mark) return;
+      const k = el.isConnected ? Math.min(1, (t - t0) / ms) : 1;
+      el.textContent = k >= 1 ? end : show(from + (to - from) * (1 - Math.pow(1 - k, 3)));
+      if (k < 1) requestAnimationFrame(step); else el.removeAttribute('data-rolling');
+    };
+    el.textContent = show(from);
+    requestAnimationFrame(step);
   }
   function countUp(el, from, to, ms, show) {
     if (!el) return;
@@ -352,11 +428,56 @@
     };
     requestAnimationFrame(step);
   }
+  // A number that rises off a button: "+5" where the thumb was.
+  function floatUp(from, text, cls) {
+    if (calm.matches || !from) return;
+    const r = from.getBoundingClientRect();
+    if (!r.width) return;
+    const el = document.createElement('div');
+    el.className = 'floater' + (cls ? ' ' + cls : '');
+    el.textContent = text;
+    el.style.left = (r.left + r.width / 2) + 'px';
+    el.style.top = (r.top + r.height * .3) + 'px';
+    document.body.appendChild(el);
+    const a = play(el, [
+      { opacity: 0, transform: 'translate(-50%, -30%) scale(.6)' },
+      { opacity: 1, transform: 'translate(-50%, -95%) scale(1.12)', offset: .22 },
+      { opacity: 1, transform: 'translate(-50%, -150%) scale(1)', offset: .55 },
+      { opacity: 0, transform: 'translate(-50%, -230%) scale(.96)' },
+    ], { duration: 820, easing: 'cubic-bezier(.2, .7, .3, 1)' });
+    if (a) a.onfinish = () => el.remove(); else el.remove();
+  }
+
+  // Touch feedback. iPhones only show a pressed state once the page listens for touches, and they have no
+  // vibration call: a hidden switch flipped by a tap makes the system tick instead (iOS 18 and later; elsewhere nothing happens).
+  document.addEventListener('touchstart', () => {}, { passive: true });
+  let tickEl = null;
+  function tick1() {
+    try {
+      if (!tickEl) {
+        tickEl = document.createElement('label');
+        tickEl.setAttribute('aria-hidden', 'true');
+        tickEl.style.display = 'none';
+        const sw = document.createElement('input');
+        sw.type = 'checkbox'; sw.setAttribute('switch', ''); sw.tabIndex = -1;
+        tickEl.appendChild(sw);
+      }
+      document.head.appendChild(tickEl); tickEl.click(); tickEl.remove();
+    } catch (e) {}
+  }
+  const HAPTIC = { tap: [10], ok: [14, 70, 22], big: [20, 80, 20, 80, 48], warn: [60, 90, 60] };
+  function haptic(kind) {
+    const p = HAPTIC[kind] || HAPTIC.tap;
+    if (navigator.vibrate) { try { navigator.vibrate(p); } catch (e) {} return; }
+    if (!IOS) return;
+    for (let i = 0; i < Math.ceil(p.length / 2); i++) if (i) setTimeout(tick1, i * 95); else tick1();
+  }
 
   // Sparks: one canvas above everything, drawn only while something is flying.
   const fxc = $('#fx'), fx2d = fxc && fxc.getContext ? fxc.getContext('2d') : null;
   let sparks = [], fxOn = false, fxLast = 0;
   const token = name => 'rgb(' + (getComputedStyle(document.documentElement).getPropertyValue(name).trim().split(/\s+/).join(',') || '255,255,255') + ')';
+  const tokenA = (name, a) => token(name).replace('rgb(', 'rgba(').replace(')', ',' + a + ')');
   function burst(x, y, o) {
     if (!fx2d || calm.matches) return;
     o = o || {};
@@ -405,8 +526,35 @@
     setTimeout(() => el.remove(), 2500);
     return el;
   }
-  let xpToast = null;
-  function xpGain(n) { // quick taps add up in one toast instead of stacking
+  // XP goes where XP lives: "+12 XP" beside the level bar that is in view (the full header, or the small one that
+  // follows the page down), and quick taps add up in it. With neither in view it is a toast.
+  let xpToast = null, gain = null;
+  function xpGain(n) {
+    const small = root.classList.contains('mini-on') && !root.classList.contains('typing'); // the small header may still be sliding in, so its place is not measured
+    const bar = small ? mini && mini.querySelector('.bar.xp') : app.querySelector('.hud .bar.xp');
+    const r = bar && bar.getBoundingClientRect();
+    if (!bar || modal || (!small && (!r.width || r.bottom < 0 || r.top > innerHeight))) { xpToastAdd(n); return; }
+    const home = bar.parentElement;
+    if (gain && gain.el.isConnected && gain.home === home) clearTimeout(gain.t);
+    else {
+      if (gain) gain.el.remove();
+      const el = document.createElement('span');
+      el.className = 'xp-gain'; el.setAttribute('data-float', ''); el.setAttribute('aria-hidden', 'true');
+      home.appendChild(el);
+      gain = { el, home, sum: 0, t: 0 };
+    }
+    gain.sum += n;
+    gain.el.textContent = '+' + gain.sum + ' XP';
+    play(gain.el, [{ opacity: 0, transform: 'translateY(7px) scale(.7)' }, { opacity: 1, transform: 'translateY(-2px) scale(1.12)', offset: .45 }, { opacity: 1, transform: 'none' }], { duration: 420 });
+    play(bar, [{ filter: 'brightness(1)' }, { filter: 'brightness(1.9) saturate(1.2)', offset: .25 }, { filter: 'brightness(1)' }], { duration: 700 });
+    const mine = gain;
+    mine.t = setTimeout(() => {
+      const end = () => { mine.el.remove(); if (gain === mine) gain = null; };
+      const a = play(mine.el, [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-9px)' }], { duration: 320, easing: EASE.in, fill: 'forwards' });
+      if (a) a.onfinish = end; else end();
+    }, 1500);
+  }
+  function xpToastAdd(n) {
     if (xpToast && xpToast.el.isConnected) {
       clearTimeout(xpToast.t);
       xpToast.sum += n;
@@ -421,7 +569,6 @@
     const mine = xpToast;
     mine.t = setTimeout(() => { mine.el.remove(); if (xpToast === mine) xpToast = null; }, 2500);
   }
-  function buzz(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
 
   // ---------- events from the engine ----------
   function handle(events) {
@@ -430,8 +577,10 @@
     for (const e of events) {
       if (e.type === 'xp') { if (e.amount > 0) xpGain(e.amount); }
       else if (e.type === 'task') {
-        toast(e.name + ' complete', 'ok', ic('clear')); buzz(40);
-        burstAt($('#app .quest[data-id="' + e.id + '"] .q-med'), { colors: [token('--okc'), '#ffffff', token('--g')], n: 30, speed: 300 });
+        toast(e.name + ' complete', 'ok', ic('clear')); haptic('ok');
+        const card = $('#app .quest[data-id="' + e.id + '"]');
+        burstAt(card && card.querySelector('.q-med'), { colors: [token('--okc'), '#ffffff', token('--g')], n: 34, speed: 320 });
+        play(card, [{ boxShadow: '0 0 0 0 ' + tokenA('--okc', 0) }, { boxShadow: '0 0 34px 3px ' + tokenA('--okc', .7), offset: .28 }, { boxShadow: '0 0 0 0 ' + tokenA('--okc', 0) }], { duration: 1000 });
       }
       else if (e.type === 'penaltyCleared') toast('Penalty served. The streak carries on.', 'ok', ic('shield'));
       else if (e.type === 'stat') toast(STAT[e.stat] + ' +' + e.gain + ' (now ' + e.value + ')', '', ic(e.stat.toLowerCase()));
@@ -454,7 +603,22 @@
     }
   }
   // A system window over the page. `cls` may carry a colour mood: "gold" or "warnwin".
+  // A window that closes fades out on a layer of its own, so the page, or the next window, is live at once.
+  function retire() {
+    const old = layer.firstElementChild;
+    if (!old) return;
+    if (calm.matches || !ghost || typeof old.animate !== 'function') { layer.innerHTML = ''; return; }
+    for (const el of old.querySelectorAll('[id]')) el.removeAttribute('id');
+    old.setAttribute('inert', ''); old.removeAttribute('role'); old.removeAttribute('aria-modal');
+    ghost.appendChild(old);
+    layer.innerHTML = '';
+    const win = old.querySelector('.win, .tap-pad');
+    play(old, [{ opacity: 1 }, { opacity: 0 }], { duration: 230, easing: EASE.in, fill: 'forwards' });
+    if (win) play(win, [{ transform: 'none' }, { transform: 'translateY(12px) scale(.96)' }], { duration: 230, easing: EASE.in, fill: 'forwards' });
+    setTimeout(() => old.remove(), 260);
+  }
   function overlay(kind, inner, cls) {
+    retire();
     modal = kind;
     cls = cls || '';
     const mood = /\bgold\b/.test(cls) ? ' gold' : /\bwarnwin\b/.test(cls) ? ' warnwin' : '';
@@ -462,7 +626,7 @@
     const f = layer.querySelector('[data-focus]');
     if (f) try { f.focus({ preventScroll: true }); } catch (e) {}
   }
-  function closeLayer() { stopPlank(); modal = null; layer.innerHTML = ''; }
+  function closeLayer() { stopPlank(); modal = null; retire(); }
   const rewardRows = rows => rows.map(r => `<div${r[2] ? ' class="' + r[2] + '"' : ''}><span>${r[0]}</span><b>${r[1]}</b></div>`).join('');
   const sigil = name => `<div class="sigil">${ic(name)}</div>`;
 
@@ -530,7 +694,7 @@
       <div class="rewards">${rewardRows(rows)}</div>
       <p class="note">${msg}</p>
       <button class="btn primary wide" data-act="close-modal" data-focus>${btn}</button>`, 'center ' + cls);
-    if (r.broke) buzz([200, 80, 200]);
+    if (r.broke) haptic('warn');
   }
 
   // The clear screen: the chest waits to be opened, then the rewards are counted out.
@@ -556,7 +720,7 @@
         <p class="note">${e.full ? 'That was the full routine: 100 / 100 / 100 / 5 km. This is the limit. Hold it.' : 'Your answer steers the quest. Clear 5 days out of 7 and it grows by about 10%, unless it felt too hard twice that week.'}</p>
         <button class="btn primary wide" data-act="close-modal">Claim</button>
       </div>`, 'center clearwin');
-    buzz([60, 40, 120]);
+    haptic('big');
   }
   function openChest() {
     const w = layer.querySelector('.clearwin'), loot = $('#chest-loot');
@@ -568,7 +732,7 @@
     const n = $('#loot-n');
     countUp(n, 0, Number(n.dataset.n), 700);
     burstAt(w.querySelector('.chest-stage'), { colors: goldSparks().concat(token('--g'), token('--v')), n: 70, speed: 460, spread: Math.PI * 1.3, gravity: 620, ttl: 1.3, size: 6 });
-    buzz([30, 30, 90]);
+    haptic('ok');
     const b = loot.querySelector('[data-act="close-modal"]');
     if (b) try { b.focus({ preventScroll: true }); } catch (err) {}
   }
@@ -588,7 +752,7 @@
       <button class="btn primary wide" data-act="close-modal" data-focus>Continue</button>`, 'center');
     countUp($('#lv-to'), e.from, e.level, 600);
     burstAt(layer.querySelector('.burst'), { n: 46, speed: 380, gravity: -120, ttl: 1.2 });
-    buzz([80, 50, 80, 50, 200]);
+    haptic('big');
   }
 
   // Rank up: the old crest gives way to the new one.
@@ -600,7 +764,7 @@
       <div class="rewards late">${rewardRows(e.unlocks.map(u => [u, '&#10003;']))}</div>
       <button class="btn primary wide late" data-act="close-modal" data-focus>Continue</button>`, 'center gold');
     setTimeout(() => { if (modal === 'rank') burstAt(layer.querySelector('.rank-stage'), { colors: goldSparks(), n: 80, speed: 520, gravity: 300, ttl: 1.4, size: 6 }); }, calm.matches ? 0 : 950);
-    buzz([120, 60, 120, 60, 300]);
+    haptic('big');
   }
 
   function trialModal() {
@@ -688,10 +852,11 @@
   // ---------- screens ----------
   const myCrest = cls => crest(state.rank, E.auraOf(state), (cls || '') + (state.hard ? ' hard' : ''), state.rank >= 4);
   const noticeIcon = cls => /\bwarn\b/.test(cls) ? 'skull' : /\bok\b/.test(cls) ? 'clear' : /\bgold\b/.test(cls) ? 'trial' : 'system';
-  const banner = (cls, title, text, extra, icon) => `<div class="banner ${cls}">${ic(icon || noticeIcon(cls))}<div class="b-main"><h3>${title}</h3><p class="note">${text}</p>${extra || ''}</div></div>`;
-  const opt = (title, text, act, label, cls, icon) => `<div class="opt ${cls || ''}">${icon || ''}<span class="o-main"><b>${title}</b><small>${text}</small></span>${act ? `<button class="btn small" data-act="${act}">${label}</button>` : label ? `<span class="tag dim">${label}</span>` : ''}</div>`;
-  const head = (icon, title, sub, chip) => `<header class="scr-head"><span class="sh-ic">${ic(icon)}</span><div class="sh-text"><h1 class="win-title">${title}</h1><div class="win-sub">${sub}</div></div>${chip || ''}</header>`;
-  const panel = (label, body, cls) => `<section class="panel ${cls || ''}">${label ? `<div class="ph">${label}</div>` : ''}${body}</section>`;
+  const slug = t => String(t).replace(/<[^>]*>/g, '').replace(/[^a-z]+/gi, '').toLowerCase().slice(0, 40);
+  const banner = (cls, title, text, extra, icon) => `<div class="banner ${cls}" data-key="b-${slug(title)}">${ic(icon || noticeIcon(cls))}<div class="b-main"><h3>${title}</h3><p class="note">${text}</p>${extra || ''}</div></div>`;
+  const opt = (title, text, act, label, cls, icon) => `<div class="opt ${cls || ''}" data-key="o-${slug(title)}">${icon || ''}<span class="o-main"><b>${title}</b><small>${text}</small></span>${act ? `<button class="btn small" data-act="${act}">${label}</button>` : label ? `<span class="tag dim">${label}</span>` : ''}</div>`;
+  const head = (icon, title, sub, chip) => `<header class="scr-head" data-key="head"><span class="sh-ic">${ic(icon)}</span><div class="sh-text"><h1 class="win-title">${title}</h1><div class="win-sub">${sub}</div></div>${chip || ''}</header>`;
+  const panel = (label, body, cls, key) => `<section class="panel ${cls || ''}" data-key="${key || 'p-' + slug(label)}">${label ? `<div class="ph">${label}</div>` : ''}${body}</section>`;
 
   function testBar() {
     return testing() ? `<div class="testbar"><span>Test clock <b>+${plural(state.debugOffset, 'day')}</b>. Nothing done here is kept.</span><button class="btn small" data-act="unskip">Back to today</button></div>` : '';
@@ -703,17 +868,28 @@
   function hud() {
     const need = E.xpForNext(state.level), max = !isFinite(need), live = E.liveStreak(state);
     const t = E.TITLES.find(x => x.id === state.title);
-    return `<header class="hud">
+    const lvUp = changed('hud-lv', state.level);
+    return `<header class="hud" data-key="hud">
       <div class="hud-crest">${myCrest()}</div>
       <div class="hud-main">
         <div class="hud-top"><span class="pname">${esc(state.name)}</span><span class="pills">
-          <span class="pill" role="img" aria-label="${state.essence} Essence">${ob('essence')}${num(state.essence)}</span>
-          <span class="pill ${live.n ? 'hot' : ''}" role="img" aria-label="Streak ${live.n}">${ob('flame')}${live.n}</span>
+          <span class="pill" role="img" aria-label="${state.essence} Essence">${ob('essence')}<span${roll('hud-ess', state.essence, 'num', true)}>${num(state.essence)}</span></span>
+          <span class="pill ${live.n ? 'hot' : ''}" role="img" aria-label="Streak ${live.n}">${ob('flame')}<span${roll('hud-streak', live.n)}>${live.n}</span></span>
         </span></div>
         <div class="ptitle"><span>${t ? esc(t.name) : 'No title'}</span>${state.hard ? '<span class="tag-hard">HARD MODE</span>' : ''}</div>
-        <div class="xprow"><span class="plevel">LV ${state.level}</span><div class="bar xp">${fill('xp', max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : num(state.xp) + ' / ' + num(need) + ' XP'}</span></div></div>
+        <div class="xprow"><span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span><div class="bar xp">${fill('xp', max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : `<span><b${lvUp ? '' : roll('hud-xp', state.xp, 'num', true)}>${num(state.xp)}</b> / ${num(need)} XP</span>`}</span></div></div>
       </div>
     </header>`;
+  }
+  // The small header that follows the page down once the full one has scrolled away.
+  function miniHud() {
+    if (!mini) return;
+    if (!state) { mini.innerHTML = ''; return; }
+    const need = E.xpForNext(state.level), max = !isFinite(need), live = E.liveStreak(state), lvUp = changed('mini-lv', state.level);
+    morph(mini, `<div class="mini-in" data-act="top">${myCrest('mini')}<span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span>
+      <div class="bar xp">${fill('mxp', max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : `<span><b${lvUp ? '' : roll('mini-xp', state.xp, 'num', true)}>${num(state.xp)}</b> / ${num(need)} XP</span>`}</span></div>
+      <span class="pill ${live.n ? 'hot' : ''}">${ob('flame')}${live.n}</span></div>`);
+    runFx(mini);
   }
   function countdown() {
     const n = now(), m = Math.max(0, Math.round((E.nextReset(n) - n) / 60000));
@@ -726,7 +902,7 @@
     if (qselDay !== state.lastDay) { qsel = null; qselDay = state.lastDay; } // the choice belongs to one day
     return qsel === 'none' ? null : E.QUEST_IDS.includes(qsel) ? qsel : (E.QUESTS.find(q => day.progress[q.id] < day.targets[q.id]) || {}).id || null;
   };
-  const stamp = key => `<span class="stamp${changed(key, true) ? ' pop' : ''}">${ic('clear')}Clear</span>`;
+  const stamp = key => `<span class="stamp"${changed(key, true) ? ' data-fx="stamp"' : ''}>${ic('clear')}Clear</span>`;
 
   function questScreen() {
     const day = E.today(state), live = E.liveStreak(state);
@@ -734,7 +910,7 @@
     const pen = day.penalty, penDone = E.penaltyDone(day);
     const title = resting ? 'Rest Day' : paused ? 'Quest Paused' : pen ? 'Penalty Quest' : 'Daily Quest';
     const mood = resting ? 'rest' : paused ? 'paused' : pen && !penDone && logOn ? 'pen warnwin' : day.cleared ? 'cleared' : '';
-    let out = `<section class="keyart aura-${E.auraOf(state)} ${mood}">
+    let out = `<section class="keyart aura-${E.auraOf(state)} ${mood}" data-key="keyart">
       <div class="ka-art"><i class="ka-scene"></i>${figure(state.rank >= 4)}<i class="ka-scrim"></i></div>
       <span class="chip ${live.n ? 'hot' : ''}">${ob('flame')}Streak ${live.n}</span>
       <div class="ka-text"><h1 class="win-title">${title}</h1><div class="win-sub">${ic('time')}<span>Next quest at 4 AM, in <span id="cd">${countdown()}</span>.</span></div></div>
@@ -761,32 +937,31 @@
         : state.graceDay === state.lastDay ? 'You awakened today, so nothing is owed if you start tomorrow. After today, a day under 25% brings a Penalty Quest.'
         : sc > 0 ? 'Under 25% means a Penalty Quest tomorrow.' : 'Nothing logged yet. A missed day means a Penalty Quest tomorrow.';
       // The score bar is a reward track: no penalty at 25%, the streak grows at 75%, the chest waits at the end.
-      const node = (key, at, icon, text) => { const lit = sc >= at; return `<span class="tk-node${lit ? ' lit' : ''}${changed(key, lit) && lit ? ' pop' : ''}" style="left:${at * 100}%"><b>${icon}</b><small>${text}</small></span>`; };
-      out += `<section class="panel track${day.cleared ? ' cleared' : ''}${pen && !penDone ? ' warn' : ''}">
+      const node = (key, at, icon, text) => { const lit = sc >= at; return `<span class="tk-node${lit ? ' lit' : ''}"${changed(key, lit) && lit ? ' data-fx="node"' : ''} style="left:${at * 100}%"><b>${icon}</b><small>${text}</small></span>`; };
+      out += `<section class="panel track${day.cleared ? ' cleared' : ''}${pen && !penDone ? ' warn' : ''}" data-key="track">
         <div class="tk-row">
           <div class="tk-main">
-            <div class="row"><span class="ph">Quest score</span><span class="tk-pct">${pct(sc)}</span></div>
+            <div class="row"><span class="ph">Quest score</span><span class="tk-pct"${roll('tk-pct', Math.round(sc * 100), 'pct', true)}>${pct(sc)}</span></div>
             <div class="tk-bar${pen ? ' bare' : ''}">
               <div class="bar tall seg ${day.cleared ? 'ok' : ''}">${fill('score', sc)}</div>
               ${pen ? '' : node('n1', T.partial, ic('shield'), 'No penalty') + node('n2', T.nearClear, ob('flame'), 'Streak +1')}
             </div>
           </div>
-          <span class="tk-chest${day.cleared ? ' lit' : ''}">${ob(day.cleared ? 'chest-open' : 'chest-closed')}<small>${day.cleared ? 'Claimed' : 'Chest'}</small></span>
+          <span class="tk-chest${day.cleared ? ' lit' : ''}"${changed('tk-chest', !!day.cleared) && day.cleared ? ' data-fx="lit"' : ''}>${ob(day.cleared ? 'chest-open' : 'chest-closed')}<small>${day.cleared ? 'Claimed' : 'Chest'}</small></span>
         </div>
         <p class="note" id="q-hint">${hint}</p>
       </section>`;
 
       const focusOn = state.skills.includes('splitFocus'), open = openQuest(day);
+      // Every card carries its controls; a closed card folds them away (and makes them inert), so opening and
+      // closing is one smooth height change instead of a jump.
       const rows = E.QUESTS.map(q => {
-        const id = q.id, p = day.progress[id], t = day.targets[id], done = p >= t, isRun = id === 'run', share = Math.min(1, p / t);
-        const shownCount = fmt(id, p);
-        const top = `<span class="q-med" ${moved('m-' + id, String(Math.round(share * 1000) / 10), '--p')}style="--p:${Math.round(share * 1000) / 10}">${ic(id)}</span>
+        const id = q.id, p = day.progress[id], t = day.targets[id], done = p >= t, isRun = id === 'run', share = Math.min(1, p / t), isOpen = id === open;
+        const top = `<span class="q-med" style="--p:${Math.round(share * 1000) / 10}">${ic(id)}</span>
           <span class="q-body">
-            <span class="q-top"><span class="q-name">${q.name}${id === 'pushups' && state.test.knee ? ' (knee)' : ''}</span><span class="q-count${changed('c-' + id, shownCount) ? ' bump' : ''}">${shownCount}<small> / ${fmt(id, t)}${unit(id)}</small></span></span>
+            <span class="q-top"><span class="q-name">${q.name}${id === 'pushups' && state.test.knee ? ' (knee)' : ''}</span><span class="q-count"><b class="q-n"${roll('c-' + id, r2(p), isRun ? 'run' : '', true)}${changed('cb-' + id, r2(p)) ? ' data-fx="bump"' : ''}>${fmt(id, p)}</b><small> / ${fmt(id, t)}${unit(id)}</small></span></span>
             <span class="bar seg ${done ? 'ok' : ''}">${fill('q-' + id, share)}</span>
           </span>${done ? stamp('s-' + id) : (changed('s-' + id, false), '')}`;
-        if (id !== open) return `<button class="quest ${done ? 'done' : ''}" data-act="pick" data-id="${id}" aria-expanded="false">${top}</button>`;
-
         const cap = isRun ? r2(t * (1 + T.overflowCap)) : Math.floor(t * (1 + T.overflowCap) + 1e-9);
         const notes = [];
         if (day.trial && !day.trial.passed && p < day.trial.req[id]) notes.push('Trial: ' + fmt(id, day.trial.req[id]) + unit(id) + ' needed, ' + fmt(id, r2(day.trial.req[id] - p)) + unit(id) + ' to go.');
@@ -798,8 +973,8 @@
           ? `<button class="btn grow" data-act="add" data-id="run" data-n="0.5">+0.5</button>
              <button class="btn grow" data-act="add" data-id="run" data-n="1">+1</button>
              <div class="addrow full">
-               <input class="field" id="in-run" inputmode="decimal" placeholder="km" aria-label="Run distance in km">
-               <input class="field" id="in-runmin" inputmode="decimal" placeholder="min" aria-label="Run time in minutes, optional">
+               <input class="field" id="in-run" inputmode="decimal" placeholder="km" aria-label="Run distance in km" enterkeyhint="done">
+               <input class="field" id="in-runmin" inputmode="decimal" placeholder="min" aria-label="Run time in minutes, optional" enterkeyhint="done">
                <button class="btn" data-act="add-custom" data-id="run">Add</button>
              </div>`
           : `<button class="btn grow" data-act="add" data-id="${id}" data-n="1">+1</button>
@@ -807,44 +982,48 @@
              <button class="btn grow" data-act="add" data-id="${id}" data-n="10">+10</button>
              <button class="btn grow tapbtn" data-act="tap" data-id="${id}">Tap</button>
              <div class="addrow full">
-               <input class="field" id="in-${id}" inputmode="numeric" placeholder="reps" aria-label="${q.name} amount">
+               <input class="field" id="in-${id}" inputmode="numeric" placeholder="reps" aria-label="${q.name} amount" enterkeyhint="done">
                <button class="btn" data-act="add-custom" data-id="${id}">Add</button>
              </div>`;
-        return `<div class="quest act ${done ? 'done' : ''}" data-id="${id}">
-          <button class="q-head" data-act="pick" data-id="${id}" aria-expanded="true">${top}</button>
-          <div class="q-tags"><span class="q-stat">${q.stat}</span><span class="tier">Tier ${day.tiers[id]} &middot; XP x${E.multOf(day.tiers[id])}</span>${focusOn ? `<button class="chiplet ${day.focus === id ? 'on' : ''}" data-act="focus" data-id="${id}">Focus x2</button>` : ''}</div>
-          <div class="q-btns">${btns}</div>
-          ${notes.map(n => `<p class="note">${n}</p>`).join('')}
+        return `<div class="quest${isOpen ? ' act' : ''}${done ? ' done' : ''}" data-key="q-${id}" data-id="${id}">
+          <button class="q-head" data-act="pick" data-id="${id}" aria-expanded="${isOpen}">${top}</button>
+          <div class="q-more"${isOpen ? '' : ' inert'}><div class="q-in">
+            <div class="q-tags"><span class="q-stat">${q.stat}</span><span class="tier">Tier ${day.tiers[id]} &middot; XP x${E.multOf(day.tiers[id])}</span>${focusOn ? `<button class="chiplet ${day.focus === id ? 'on' : ''}" data-act="focus" data-id="${id}">Focus x2</button>` : ''}</div>
+            <div class="q-btns">${btns}</div>
+            ${notes.map(n => `<p class="note">${n}</p>`).join('')}
+          </div></div>
         </div>`;
       }).join('');
 
       let plankRow = '';
       if (pen && pen.type === 'plank') {
         const pd = pen.done >= pen.need, share = Math.min(1, pen.done / pen.need);
-        plankRow = `<div class="quest pen act ${pd ? 'done' : 'warn'}">
+        plankRow = `<div class="quest pen act ${pd ? 'done' : 'warn'}" data-key="q-plank">
           <div class="q-head">
             <span class="q-med" style="--p:${Math.round(share * 100)}">${ic('time')}</span>
             <span class="q-body">
-              <span class="q-top"><span class="q-name">Plank</span><span class="q-count">${mmss(pen.done)}<small> / ${mmss(pen.need)}</small></span></span>
+              <span class="q-top"><span class="q-name">Plank</span><span class="q-count"><b class="q-n"${changed('cb-plank', pen.done) ? ' data-fx="bump"' : ''}>${mmss(pen.done)}</b><small> / ${mmss(pen.need)}</small></span></span>
               <span class="bar seg ${pd ? 'ok' : ''}">${fill('q-plank', share)}</span>
             </span>${pd ? stamp('s-plank') : (changed('s-plank', false), '')}
           </div>
-          <div class="q-tags"><span class="q-stat">Penalty</span></div>
-          <div class="q-btns">
-            <button class="btn grow" data-act="plank-timer">Timer</button>
-            <button class="btn grow" data-act="plank-add" data-n="30">+30 s</button>
-            <button class="btn grow" data-act="plank-add" data-n="60">+1 min</button>
-          </div>
-          ${pd ? '' : '<p class="note">Total time counts. It does not have to be one hold.</p>'}
+          <div class="q-more"><div class="q-in">
+            <div class="q-tags"><span class="q-stat">Penalty</span></div>
+            <div class="q-btns">
+              <button class="btn grow" data-act="plank-timer">Timer</button>
+              <button class="btn grow" data-act="plank-add" data-n="30">+30 s</button>
+              <button class="btn grow" data-act="plank-add" data-n="60">+1 min</button>
+            </div>
+            ${pd ? '' : '<p class="note">Total time counts. It does not have to be one hold.</p>'}
+          </div></div>
         </div>`;
       }
-      out += `<div class="quests">${rows}${plankRow}</div>
-        <div class="row foot">
-          <span class="note">Earned today: <b>${Math.round(Number(day.xp) || 0)} XP</b></span>
+      out += `<div class="quests" data-key="quests">${rows}${plankRow}</div>
+        <div class="row foot" data-key="foot">
+          <span class="note">Earned today: <b${roll('day-xp', Math.round(Number(day.xp) || 0), '', true)}>${Math.round(Number(day.xp) || 0)}</b><b> XP</b></span>
           <button class="btn ghost small" data-act="undo" ${day.log && day.log.length ? '' : 'disabled'}>Undo last</button>
         </div>
-        <details class="more" data-keep="xp" ${openDetails.xp ? 'open' : ''}><summary>How today's XP adds up</summary><div class="rewards">${rewardRows(xpRows(E.breakdown(state, day), day))}</div></details>`;
-    } else if (!resting) out += `<p class="note">Today's quest stays at ${quest4(day.targets)}. It will be waiting when you are back.</p>`;
+        <details class="more" data-keep="xp" data-key="xpd" ${openDetails.xp ? 'open' : ''}><summary>How today's XP adds up</summary><div class="rewards">${rewardRows(xpRows(E.breakdown(state, day), day))}</div></details>`;
+    } else if (!resting) out += `<p class="note" data-key="held">Today's quest stays at ${quest4(day.targets)}. It will be waiting when you are back.</p>`;
 
     // today's choices
     const opts = [];
@@ -867,7 +1046,7 @@
     const od = E.overdriveInfo(state);
     if (od.equipped) opts.push(opt('Overdrive', od.active ? 'Active today: extra work pays at full rate.' : od.wait ? 'Ready again in ' + plural(od.wait, 'day') + '.' : 'Once a week, extra work up to 120% pays at full rate.', od.canUse ? 'overdrive' : null, od.active ? 'Active' : od.canUse ? 'Activate' : 'Wait', od.active ? 'on' : '', ob('rune')));
     if (E.retestDue(state)) opts.push(opt('Awakening Test', 'Four weeks since your last test. Re-test to place your quest again.', 'retest', 'Re-test', '', ic('trial', 'o-ic')));
-    if (opts.length) out += panel('Today', `<div class="opts">${opts.join('')}</div>`);
+    if (opts.length) out += panel('Today', `<div class="opts">${opts.join('')}</div>`, '', 'today');
     return out;
   }
 
@@ -990,8 +1169,8 @@
   function hunterScreen() {
     const subs = [['card', 'Card'], ['titles', 'Titles'], ['skills', 'Skills'], ['shop', 'Shop']];
     return head('hunter', 'Hunter', E.RANKS[state.rank].id + '-rank hunter, level ' + state.level + '.')
-      + `<div class="subtabs" role="tablist">${subs.map(([k, n]) => `<button class="subtab" role="tab" aria-selected="${sub === k}" data-act="sub" data-id="${k}">${n}</button>`).join('')}</div>`
-      + (sub === 'titles' ? titlesView() : sub === 'skills' ? skillsView() : sub === 'shop' ? shopView() : cardView());
+      + `<div class="subtabs" role="tablist" data-key="subtabs">${subs.map(([k, n]) => `<button class="subtab" role="tab" aria-selected="${sub === k}" data-act="sub" data-id="${k}">${n}</button>`).join('')}</div>`
+      + `<div class="subview" data-key="sub-${sub}"${changed('sub', sub) ? ' data-fx="enter"' : ''}>${sub === 'titles' ? titlesView() : sub === 'skills' ? skillsView() : sub === 'shop' ? shopView() : cardView()}</div>`;
   }
 
   // What a day shows as in the log. Today only shows a result it has already reached.
@@ -1129,30 +1308,138 @@
     const freeSkill = E.skillSlots(state) > state.skills.length && E.SKILLS.some(k => !k.inactive && state.level >= k.level && !state.skills.includes(k.id));
     return { hunter: E.trialInfo(state).canStart || freeSkill, system: E.retestDue(state) || backupDue() || !!(shell && shell.updateReady) };
   }
+  const TABS = ['quest', 'hunter', 'log', 'hall', 'system'];
+  const tabsIn = tabs && tabs.querySelector('.tabs-in');
   function render() {
     applySkin();
     if (!started) return;
-    if (!state) { tabs.hidden = true; app.innerHTML = ''; if (!modal) onboarding(); return; } // a window that is open (restoring a backup) stays
+    if (!state) { // a window that is open (restoring a backup) stays
+      tabs.hidden = true; app.innerHTML = ''; miniHud(); watchHud();
+      for (const k of Object.keys(shown)) delete shown[k]; // the next player's numbers start where they are, not counting from the last one's
+      if (!modal) onboarding();
+      return;
+    }
     tabs.hidden = false;
     const dots = tabDots();
     document.querySelectorAll('.tab').forEach(b => {
       b.setAttribute('aria-selected', String(b.dataset.tab === tab));
       b.classList.toggle('dot', !!dots[b.dataset.tab] && b.dataset.tab !== tab);
     });
+    if (tabsIn) tabsIn.style.setProperty('--ti', String(Math.max(0, TABS.indexOf(tab))));
     const a = document.activeElement;
     const keep = a && app.contains(a) && a.dataset && a.dataset.act ? [a.dataset.act, a.dataset.id || '', a.dataset.n || '', a.dataset.kind || ''] : null;
-    const typed = {};
-    app.querySelectorAll('input.field[id]').forEach(i => { if (i.value !== i.defaultValue) typed[i.id] = i.value; });
     const body = tab === 'hunter' ? hunterScreen() : tab === 'log' ? logScreen() : tab === 'hall' ? hallScreen() : tab === 'system' ? systemScreen() : questScreen();
-    app.style.setProperty('--now', (performance.now() / 1000).toFixed(2)); // looping effects pick up where they were instead of restarting
     app.dataset.tab = tab;
-    app.innerHTML = updateBar() + testBar() + hud() + body;
-    for (const id of Object.keys(typed)) { const i = document.getElementById(id); if (i) i.value = typed[id]; } // a half-typed amount survives the redraw
-    if (keep) for (const el of app.querySelectorAll('[data-act="' + keep[0] + '"]')) {
+    morph(app, updateBar() + testBar() + hud() + `<div class="screen" data-key="scr-${tab}">${body}</div>`);
+    if (keep && !app.contains(document.activeElement)) for (const el of app.querySelectorAll('[data-act="' + keep[0] + '"]')) {
       if ((el.dataset.id || '') === keep[1] && (el.dataset.n || '') === keep[2] && (el.dataset.kind || '') === keep[3] && !el.disabled) { try { el.focus({ preventScroll: true }); } catch (e) {} break; }
     }
-    settleMotion(app);
+    runFx(app);
+    miniHud();
+    watchHud();
   }
+
+  // ---------- moving between screens ----------
+  // Each tab keeps its own scroll position. The new screen slides in from the side of its tab while the tab bar's
+  // light glides across; the header and the bars stay put. Without view transitions the screen only fades in.
+  const scrollMem = {};
+  let vtRun = 0;
+  function goTab(t) {
+    if (!state || !TABS.includes(t)) return;
+    armed = null;
+    if (t === tab) { view.scrollTo({ top: 0, behavior: calm.matches ? 'auto' : 'smooth' }); return; } // the open tab again: back to the top
+    scrollMem[tab] = view.scrollTop;
+    const dir = TABS.indexOf(t) > TABS.indexOf(tab) ? 1 : -1;
+    swapView(() => { tab = t; render(); view.scrollTop = scrollMem[t] || 0; }, dir);
+  }
+  function swapView(update, dir) {
+    if (!calm.matches && typeof document.startViewTransition === 'function' && !document.hidden) {
+      const n = ++vtRun;
+      root.style.setProperty('--dir', String(dir));
+      root.classList.add('vt');
+      try {
+        const vt = document.startViewTransition(update);
+        vt.finished.finally(() => { if (n === vtRun) root.classList.remove('vt'); });
+        return;
+      } catch (e) { root.classList.remove('vt'); }
+    }
+    update();
+    play(app.querySelector('.screen'), [{ opacity: 0, transform: `translateX(${dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 340 });
+  }
+  // The small header shows once the full one has scrolled up under the status bar.
+  let hudEl = null, io = null;
+  const setMini = on => root.classList.toggle('mini-on', !!on && !!state);
+  function watchHud() {
+    const h = state ? app.querySelector('.hud') : null;
+    if (h === hudEl) return;
+    if (io && hudEl) io.unobserve(hudEl);
+    hudEl = h;
+    if (!h) { setMini(false); return; }
+    if (!io && 'IntersectionObserver' in window) {
+      const top = Math.max(0, Math.round((parseFloat(getComputedStyle(app).paddingTop) || 12) - 6));
+      io = new IntersectionObserver(es => { for (const e of es) if (e.target === hudEl) setMini(!e.isIntersecting); }, { root: view === root ? null : view, rootMargin: '-' + top + 'px 0px 0px 0px' });
+    }
+    if (io) io.observe(h);
+  }
+  // A card that opens near the bottom scrolls up far enough to show its buttons. Where it will end up is worked out
+  // at once (its own growth, and any open card above it folding away), so the scroll runs alongside the unfolding.
+  function reveal(card) {
+    if (!card) return;
+    requestAnimationFrame(() => {
+      if (!card.isConnected) return;
+      const h = el => el ? el.getBoundingClientRect().height : 0;
+      const more = card.querySelector('.q-more'), grow = more && more.firstElementChild ? Math.max(0, more.firstElementChild.scrollHeight - h(more)) : 0;
+      let shrink = 0;
+      for (const c of card.parentElement.children) { if (c === card) break; if (!c.classList.contains('act')) shrink += h(c.querySelector('.q-more')); }
+      const r = card.getBoundingClientRect(), top = r.top - shrink, bottom = r.bottom - shrink + grow;
+      const floor = (tabs.hidden ? innerHeight : tabs.getBoundingClientRect().top) - 14, ceil = (parseFloat(getComputedStyle(app).paddingTop) || 12) + 58;
+      const by = Math.min(bottom - floor, top - ceil);
+      if (by > 4) view.scrollBy({ top: by, behavior: calm.matches ? 'auto' : 'smooth' });
+    });
+  }
+  // The first look at the screen: the header, then each block, rise into place one after another.
+  function intro() {
+    if (calm.matches) return;
+    const els = [app.querySelector('.hud'), ...app.querySelectorAll('.screen > :not(.quests), .screen > .quests > *')].filter(Boolean).slice(0, 9);
+    els.forEach((el, i) => play(el, [{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }], { duration: 560, delay: 40 + i * 60, fill: 'backwards' }));
+    play(tabs, [{ transform: 'translateY(105%)' }, { transform: 'none' }], { duration: 560, delay: 140, fill: 'backwards' });
+  }
+
+  // ---------- the keyboard and the visible area ----------
+  // An iPhone moves the page while its keyboard is up, and can leave things out of place when the keyboard goes
+  // (iOS 26 is known for leaving a bottom bar halfway up the screen). The page as a whole never scrolls here, so a
+  // scroll left behind is put back, and the bars are pinned to what is really visible. While a field is being typed
+  // in, the tab bar steps aside.
+  const field = el => !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && !['checkbox', 'radio', 'file', 'button', 'submit', 'range'].includes(el.type)));
+  const touchy = window.matchMedia ? matchMedia('(hover: none) and (pointer: coarse)') : { matches: false };
+  const vv = window.visualViewport;
+  let typeT = 0;
+  function pin() {
+    if (!vv) return;
+    const zoomed = vv.scale > 1.01, still = root.classList.contains('typing') || zoomed;
+    const top = still ? 0 : Math.round(vv.offsetTop), gap = still ? 0 : Math.round(vv.offsetTop + vv.height - window.innerHeight);
+    const kb = zoomed ? 0 : Math.round(window.innerHeight - vv.offsetTop - vv.height); // what the keyboard covers, so a message can sit just above it
+    root.style.setProperty('--vv-top', (Math.abs(top) > 1 ? top : 0) + 'px');
+    root.style.setProperty('--vv-gap', (Math.abs(gap) > 1 ? gap : 0) + 'px');
+    root.style.setProperty('--kb', (kb > 1 ? kb : 0) + 'px');
+  }
+  function heal() {
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    if (document.body.scrollTop) document.body.scrollTop = 0;
+    pin();
+    setTimeout(pin, 400); // the keyboard takes a moment to go
+  }
+  document.addEventListener('focusin', e => { if (field(e.target) && touchy.matches) { clearTimeout(typeT); root.classList.add('typing'); pin(); } });
+  // The bars come back a moment after the field lets go, never in the middle of a tap: a press that starts on a button
+  // must also end on it. An action that follows a tap ends the typing at once (dismiss, below).
+  document.addEventListener('focusout', e => {
+    if (!field(e.target) || field(e.relatedTarget)) return; // straight on to the next field: still typing
+    clearTimeout(typeT);
+    typeT = setTimeout(() => { if (!field(document.activeElement)) { root.classList.remove('typing'); heal(); } }, 120);
+  });
+  if (vv) { vv.addEventListener('resize', pin); vv.addEventListener('scroll', pin); }
+  window.addEventListener('resize', pin);
+  window.addEventListener('scroll', () => { if (!root.classList.contains('typing')) heal(); }, { passive: true });
 
   // ---------- onboarding and the Awakening Test ----------
   function testForm(p) {
@@ -1182,10 +1469,11 @@
   }
   function onboarding() {
     const old = v1Save();
-    const intro = old
+    const lead = old
       ? `<p>The System has been updated. Levels come faster, a rank now needs a Rank Trial, and stats grow only from real training. Your name, lifetime totals, XP, streak and history are kept.</p>
          <p class="note">One step is new: the Awakening Test, which places each exercise in one of six tiers.</p>`
       : `<p>Every day the System gives you one quest: push-ups, sit-ups, squats and a run. Clear it to earn XP, level up and climb from E rank to S rank. The goal is <b>100 / 100 / 100 / 5 km</b>. You start at your own level.</p>`;
+    retire();
     modal = 'onboard';
     layer.innerHTML = `<div class="overlay k-onboard" role="dialog" aria-modal="true"><div class="win">
       <i class="orn t"></i><i class="orn b"></i>
@@ -1193,7 +1481,7 @@
         <span class="chip">${crest(0, 0, 'mini')}Rank E</span>
         <div class="ka-text"><div class="label">System notice</div><h1 class="win-title">Daily Quest</h1><div class="win-sub"><span>${old ? 'System update.' : 'You have qualified as a Player.'}</span></div></div>
       </div>
-      ${intro}
+      ${lead}
       <div class="slot" id="ob-install">${installNote()}</div>
       ${banner('', 'Before you start', 'This is a training game, not medical advice. If you have a heart or joint condition, are coming back from an injury, or are not sure, check with a doctor first. Stop if you feel sharp pain, dizziness or chest tightness.', '', 'shield')}
       <div class="form" id="testform">
@@ -1221,6 +1509,7 @@
   let tapId = null, tapCount = 0;
   function tapShare() { const day = E.today(state); return Math.min(100, (day.progress[tapId] + tapCount) / day.targets[tapId] * 100); }
   function tapMode(id) {
+    retire();
     tapId = id; tapCount = 0; modal = 'tap';
     const day = E.today(state);
     layer.innerHTML = `<div class="tapzone" role="dialog" aria-modal="true">
@@ -1240,7 +1529,7 @@
       ring.style.setProperty('--p', tapShare());
       ring.classList.remove('hit'); void ring.offsetWidth; ring.classList.add('hit'); // replay the pulse
     }
-    buzz(12);
+    haptic('tap');
   }
   let plank = null, plankTimer = null, wake = null;
   const plankElapsed = () => plank ? plank.acc + (plank.since ? (Date.now() - plank.since) / 1000 : 0) : 0;
@@ -1248,6 +1537,7 @@
     const p = E.today(state).penalty;
     if (!p || p.type !== 'plank') return;
     plank = { acc: 0, since: null, left: Math.max(0, p.need - p.done), rung: false };
+    retire();
     modal = 'plank';
     layer.innerHTML = `<div class="tapzone warn" role="dialog" aria-modal="true">
       <div class="row"><span class="win-title small">Plank</span><span class="chip">${mmss(p.done)} / ${mmss(p.need)} so far</span></div>
@@ -1263,7 +1553,7 @@
     num.textContent = mmss(t);
     if (ring) ring.style.setProperty('--p', plank.left ? Math.min(100, t / plank.left * 100) : 100);
     if (plank.left && t >= plank.left && !plank.rung) {
-      plank.rung = true; buzz([200, 100, 200]);
+      plank.rung = true; haptic('ok');
       const n = $('#pl-note'); if (n) n.textContent = 'Time. The penalty is served. You can stop.';
       const zone = layer.querySelector('.tapzone'); if (zone) { zone.classList.remove('warn'); zone.classList.add('ok'); }
       burstAt(ring, { colors: [token('--okc'), '#ffffff'], n: 40, speed: 360 });
@@ -1283,13 +1573,27 @@
   function stopPlank() { clearInterval(plankTimer); plankTimer = null; plank = null; releaseWake(); }
 
   // ---------- actions ----------
+  // A task that is finished keeps its card open for a beat, so the stamp lands where the eye is,
+  // and then the card folds away while the next unfinished one opens.
+  let holdT = 0;
   function add(id, n, minutes) {
     if (!state) return;
+    const wasOpen = openQuest(E.today(state)) === id;
     const ev = E.addProgress(state, id, n, { hour: now().getHours(), minutes });
     if (!ev.length) { toast('That could not be logged.', 'warn'); render(); return; } // a paused or rest day, or a save loaded from the cloud mid-count
-    if (qsel === id && ev.some(e => e.type === 'task' && e.id === id)) qsel = null; // the task is done: the open row moves on to the next one
+    if (wasOpen && ev.some(e => e.type === 'task' && e.id === id)) {
+      qsel = id;
+      clearTimeout(holdT);
+      holdT = setTimeout(() => { if (qsel !== id || !state) return; qsel = null; if (tab === 'quest') render(); }, calm.matches ? 300 : 1100);
+    }
     save(); render(); handle(ev);
   }
+  // On a phone the keyboard goes away once what was typed has been used.
+  const dismiss = () => {
+    const a = document.activeElement;
+    if (touchy.matches && field(a)) a.blur();
+    if (root.classList.contains('typing') && !field(document.activeElement)) { clearTimeout(typeT); root.classList.remove('typing'); heal(); } // the bars come back at once, ready for the XP that is about to land
+  };
   // After an engine action that answers { ok, ev, why }.
   function done(res, msg, cls) {
     if (!res.ok) { toast(res.why || 'Not possible right now.', 'warn'); render(); nextModal(); return false; }
@@ -1301,13 +1605,21 @@
   const ACTS = {
     sub(id) { sub = id; render(); },
     day(id) { logSel = id; render(); },
-    pick(id) { qsel = openQuest(E.today(state)) === id ? 'none' : id; render(); },
+    pick(id) {
+      clearTimeout(holdT);
+      qsel = openQuest(E.today(state)) === id ? 'none' : id;
+      render();
+      if (qsel === id) reveal(app.querySelector('.quest[data-id="' + id + '"]'));
+    },
+    top() { view.scrollTo({ top: 0, behavior: calm.matches ? 'auto' : 'smooth' }); },
     'chest-open'() { openChest(); },
-    add(id, el) { buzz(10); add(id, parseFloat(el.dataset.n)); },
-    'add-custom'(id) {
+    add(id, el) { haptic('tap'); floatUp(el, '+' + el.dataset.n); add(id, parseFloat(el.dataset.n)); },
+    'add-custom'(id, el) {
       const inp = $('#in-' + id), v = readNum(inp);
       if (!(v > 0)) { if (inp) inp.focus(); toast('Enter a number first', 'warn'); return; }
       inp.value = '';
+      dismiss(); haptic('tap');
+      floatUp(el || $('#app [data-act="add-custom"][data-id="' + id + '"]'), '+' + fmt(id, v) + unit(id));
       if (id !== 'run') { add(id, v); return; }
       const min = $('#in-runmin'), m = readNum(min), pace = m > 0 ? m * 60 / v : 0;
       if (min) min.value = '';
@@ -1337,7 +1649,7 @@
       state = old ? E.migrateV1(old, name, test, todayKey(), seed) : E.newPlayer(name, test, todayKey(), seed);
       qsel = null;
       if (old) store.set(V1KEY + '.done', '1');
-      closeLayer(); tab = 'quest'; save(); render();
+      closeLayer(); tab = 'quest'; save(); render(); view.scrollTop = 0; intro();
       toast(old ? 'Progress carried over. Welcome back.' : 'Title unlocked: The Awakened', 'gold');
     },
     retest() { retestModal(); },
@@ -1378,7 +1690,7 @@
     rename() {
       const inp = $('#in-name'), v = ((inp || {}).value || '').trim();
       if (!v) return;
-      inp.value = inp.defaultValue; // the redraw then shows the saved name
+      dismiss();
       done(E.rename(state, v), 'Name saved');
     },
     skip() {
@@ -1386,7 +1698,7 @@
       state.debugOffset = (state.debugOffset || 0) + 1;
       tab = 'quest';
       const ev = E.ensureDay(state, todayKey());
-      writeLocal(); render(); window.scrollTo(0, 0); handle(ev);
+      writeLocal(); render(); view.scrollTop = 0; handle(ev);
     },
     unskip() {
       let back = null;
@@ -1461,7 +1773,7 @@
       state = back; queue = []; logSel = null; qsel = null; tab = 'quest'; sub = 'card';
       closeLayer();
       const ev = E.ensureDay(state, todayKey());
-      save(); render(); window.scrollTo(0, 0);
+      save(); render(); view.scrollTop = 0; intro();
       toast('Backup restored.', 'ok', ic('shield')); handle(ev);
     },
     // ----- the installable web app -----
@@ -1485,9 +1797,10 @@
 
   document.addEventListener('click', e => {
     const tb = e.target.closest('.tab');
-    if (tb) { tab = tb.dataset.tab; armed = null; render(); window.scrollTo(0, 0); return; }
+    if (tb) { goTab(tb.dataset.tab); return; }
     const el = e.target.closest('[data-act]');
     if (!el || el.disabled) return;
+    if (el !== document.activeElement && el.dataset.act !== 'add-custom' && el.dataset.act !== 'rename') dismiss(); // a tap elsewhere ends the typing
     const was = armed, fn = ACTS[el.dataset.act];
     armed = null;
     if (fn && (state || FREE.has(el.dataset.act))) fn(el.dataset.id, el, was);
@@ -1551,7 +1864,7 @@
     if (state) {
       const ev = E.ensureDay(state, todayKey());
       if (ev.length) save();
-      render(); handle(ev);
+      render(); intro(); handle(ev);
     } else render();
   }
   meta = store.json(META);

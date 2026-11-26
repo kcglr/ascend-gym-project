@@ -47,7 +47,7 @@ function played(name, test, days, edit) {
     o = o || {};
     await page.waitForTimeout(o.wait != null ? o.wait : 2700); // entrance effects and toasts are over by then
     if (o.full) { // a tall viewport instead of a stitched page, so the tab bar and a scrolling window land where they belong
-      const h = await page.evaluate(() => { const ov = document.querySelector('#layer .overlay'); return Math.max(document.documentElement.scrollHeight, ov ? ov.scrollHeight : 0); });
+      const h = await page.evaluate(() => { const ov = document.querySelector('#layer .overlay'), v = document.querySelector('#view'); return Math.max(document.documentElement.scrollHeight, v ? v.scrollHeight : 0, ov ? ov.scrollHeight : 0); });
       await page.setViewportSize({ width: WIDTH, height: Math.max(860, h) });
       await page.waitForTimeout(120);
     }
@@ -55,8 +55,11 @@ function played(name, test, days, edit) {
     if (o.full) await page.setViewportSize({ width: WIDTH, height: 860 });
     console.log('  ' + name);
   };
-  const tabTo = (page, t) => page.click('.tab[data-tab="' + t + '"]');
-  const pick = async (page, id) => { if (!(await page.locator('#app .quest.act[data-id="' + id + '"]').count())) await page.click('#app .quest[data-id="' + id + '"]'); };
+  const tabTo = async (page, t) => { // the new screen slides in; it is there once the slide is over
+    await page.click('.tab[data-tab="' + t + '"]');
+    await page.waitForFunction(t => document.querySelector('#app').dataset.tab === t && !document.documentElement.classList.contains('vt'), t);
+  };
+  const pick = async (page, id) => { for (let i = 0; i < 3 && !(await page.locator('#app .quest.act[data-id="' + id + '"]').count()); i++) await page.click('#app .quest[data-id="' + id + '"] .q-head'); };
   const log = async (page, id, n) => { await pick(page, id); await page.fill('#in-' + id, String(n)); await page.click('#app [data-act="add-custom"][data-id="' + id + '"]'); };
   const close = async page => {
     for (let i = 0; i < 8; i++) {

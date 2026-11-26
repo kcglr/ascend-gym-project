@@ -68,7 +68,12 @@ async function test(name, fn) {
   const becomes = (page, v) => page.waitForFunction(v => !!window.AppShell && window.AppShell.version === v && !!document.querySelector('.hud, #t-name'), v, { timeout: 15000 });
   const stateOf = page => page.evaluate(k => JSON.parse(localStorage.getItem(k)), KEY);
   const metaOf = page => page.evaluate(k => JSON.parse(localStorage.getItem(k + '.meta')), KEY);
-  const text = (page, sel) => page.locator(sel).first().innerText();
+  const text = async (page, sel) => { await page.waitForFunction(() => !document.querySelector('[data-rolling]'), null, { timeout: 3000 }); return page.locator(sel).first().innerText(); };
+  // A tab slides its screen in. The new screen is there, and takes taps, once the slide is over.
+  const tabTo = async (page, t) => {
+    await page.click('.tab[data-tab="' + t + '"]');
+    await page.waitForFunction(t => document.querySelector('#app').dataset.tab === t && !document.documentElement.classList.contains('vt'), t);
+  };
   async function begin(page, name) {
     await page.waitForSelector('#t-name');
     await page.fill('#t-name', name || 'Kai');
@@ -76,9 +81,9 @@ async function test(name, fn) {
     await page.click('#layer [data-act="begin"]');
     await page.waitForSelector('.hud');
   }
-  const system = async page => { await page.click('.tab[data-tab="system"]'); await page.waitForSelector('#app [data-act="backup-save"]'); };
+  const system = async page => { await tabTo(page, 'system'); await page.waitForSelector('#app [data-act="backup-save"]'); };
   async function addReps(page, n) {
-    await page.click('.tab[data-tab="quest"]');
+    await tabTo(page, 'quest');
     await page.fill('#in-pushups', String(n));
     await page.click('#app [data-act="add-custom"][data-id="pushups"]');
   }
@@ -180,7 +185,7 @@ async function test(name, fn) {
     const { page, asked, errors } = await start();
     await controlled(page);
     await begin(page);
-    for (const t of ['hunter', 'log', 'hall', 'system']) await page.click('.tab[data-tab="' + t + '"]');
+    for (const t of ['hunter', 'log', 'hall', 'system']) await tabTo(page, t);
     await page.evaluate(() => document.fonts.ready);
     const outside = asked.filter(u => !u.startsWith(URL0) && !/^(data|blob):/.test(u));
     assert.deepEqual(outside, []);
@@ -196,7 +201,7 @@ async function test(name, fn) {
     await page.reload();
     await begin(page, 'Offline');
     await addReps(page, 5);
-    for (const t of ['hunter', 'log', 'hall', 'system', 'quest']) await page.click('.tab[data-tab="' + t + '"]');
+    for (const t of ['hunter', 'log', 'hall', 'system', 'quest']) await tabTo(page, t);
     await page.evaluate(() => document.fonts.ready);
     await page.waitForFunction(() => Array.from(document.images).every(i => i.complete));
     assert.deepEqual(await page.evaluate(() => Array.from(document.images).filter(i => !i.naturalWidth).map(i => i.src)), []);
@@ -292,10 +297,10 @@ async function test(name, fn) {
     const other = await tab();
     await other.waitForSelector('.hud');
     await controlled(other);
-    await other.click('.tab[data-tab="log"]'); // in use, so it will not switch by itself
+    await tabTo(other, 'log'); // in use, so it will not switch by itself
     site.setRoot(deploy('b000000005'));
     await system(page);
-    await page.click('#app [data-act="app-check"]');
+    await page.locator('#app [data-act="app-check"]').click({ timeout: 1500 }).catch(() => {}); // unless the app found the new version by itself on the way there
     await page.click('.testbar.upd [data-act="app-update"]');
     await becomes(page, 'b000000005');
     await other.waitForSelector('.testbar.upd');
@@ -525,7 +530,7 @@ async function test(name, fn) {
     assert.match(await text(page, '#bk-line'), /No backup yet\. This device holds the only copy/);
     await Promise.all([page.waitForEvent('download'), page.click('#app [data-act="backup-save"]')]);
     await page.waitForSelector('.toast:has-text("Backup saved")');
-    await page.click('.tab[data-tab="quest"]');
+    await tabTo(page, 'quest');
     assert.equal(await page.locator('.tab[data-tab="system"].dot').count(), 0);
     // two weeks later it asks again
     await page.evaluate(k => { const m = JSON.parse(localStorage.getItem(k + '.meta')); m.backupAt -= 15 * 86400000; localStorage.setItem(k + '.meta', JSON.stringify(m)); }, KEY);
@@ -560,18 +565,53 @@ async function test(name, fn) {
     await begin(page);
     const box = await page.evaluate(() => {
       const px = (sel, prop) => parseFloat(getComputedStyle(document.querySelector(sel))[prop]);
-      return { html: px('html', 'paddingTop'), bar: document.querySelector('#statusbar').getBoundingClientRect().height, hud: document.querySelector('.hud').getBoundingClientRect().top, tabs: px('.tabs', 'paddingBottom'), app: px('#app', 'paddingBottom') };
+      return { top: px('#app', 'paddingTop'), bar: document.querySelector('#statusbar').getBoundingClientRect().height, hud: document.querySelector('.hud').getBoundingClientRect().top, tabs: px('.tabs', 'paddingBottom'), app: px('#app', 'paddingBottom') };
     });
-    if (box.html === 0) { await done(); return 'skip'; } // this browser build takes the override but does not apply it
-    assert.equal(box.html, 59);
+    if (box.top === 12) { await done(); return 'skip'; } // this browser build takes the override but does not apply it
+    assert.equal(box.top, 12 + 59);
     assert.equal(box.bar, 59);
     assert.ok(box.hud >= 59, 'the status strip starts under the clock');
     assert.equal(box.tabs, 40);
-    assert.equal(box.app, 142);
+    assert.equal(box.app, 72 + 34 + 24);
     await system(page);
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.evaluate(() => { const v = document.querySelector('#view'); v.scrollTop = v.scrollHeight; });
     const last = await page.evaluate(() => ({ note: document.querySelector('#app .note.fine').getBoundingClientRect().bottom, tabs: document.querySelector('.tabs').getBoundingClientRect().top }));
     assert.ok(last.note <= last.tabs, 'the last line of a screen clears the tab bar');
+    // scrolled down, the small header holds the level under the status strip
+    await page.waitForFunction(() => document.documentElement.classList.contains('mini-on'));
+    await page.waitForTimeout(500); // it slides down into place
+    const mini = await page.evaluate(() => document.querySelector('#mini .mini-in').getBoundingClientRect().top);
+    assert.ok(mini >= 59, 'the small header starts under the clock, at ' + mini);
+    await done();
+  });
+  await test('the tab bar stays at the bottom while scrolling, and steps aside while typing', async () => {
+    const { page, errors } = await start({ iphone: true, standalone: true });
+    await begin(page);
+    const bar = () => page.evaluate(() => ({ bottom: Math.round(document.querySelector('.tabs').getBoundingClientRect().bottom), screen: innerHeight, page: Math.round(scrollY), typing: document.documentElement.classList.contains('typing') }));
+    for (const t of ['quest', 'system']) {
+      await tabTo(page, t);
+      await page.evaluate(() => { const v = document.querySelector('#view'); v.scrollTop = v.scrollHeight / 2; });
+      await page.waitForTimeout(100);
+      const b = await bar();
+      assert.equal(b.bottom, b.screen, t + ': the tab bar sits on the bottom edge');
+      assert.equal(b.page, 0, t + ': the page itself never scrolls, only the frame inside it');
+    }
+    await tabTo(page, 'quest');
+    await page.locator('#in-pushups').tap();
+    await page.waitForTimeout(450);
+    let b = await bar();
+    assert.equal(b.typing, true, 'a field in use marks the page as typing');
+    assert.ok(b.bottom > b.screen, 'while typing the tab bar is out of the way');
+    await page.keyboard.type('12');
+    await page.locator('#app [data-act="add-custom"][data-id="pushups"]').tap();
+    await page.waitForTimeout(600);
+    b = await bar();
+    assert.equal(b.typing, false, 'adding the reps puts the keyboard away');
+    assert.equal(b.bottom, b.screen, 'and the tab bar is back on the bottom edge');
+    const s = await stateOf(page);
+    assert.equal(s.days[s.lastDay].progress.pushups, 12);
+    assert.equal(await page.locator('#in-pushups').count(), 1, 'the field is the same one, not drawn again');
+    assert.deepEqual(errors, []);
     await done();
   });
   await test('nothing scrolls sideways on a small phone, a large phone or a PC', async () => {
@@ -581,7 +621,7 @@ async function test(name, fn) {
       await page.waitForSelector('#t-name');
       await wide('onboarding');
       await begin(page);
-      for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) { await page.click('.tab[data-tab="' + t + '"]'); await wide(t); }
+      for (const t of ['quest', 'hunter', 'log', 'hall', 'system']) { await tabTo(page, t); await wide(t); }
       await page.click('#app [data-act="backup-open"]');
       await page.waitForSelector('#bk-text');
       await wide('restore window');

@@ -29,7 +29,7 @@ or to move progress between a phone and a PC, use **System, Backup** (see [Backu
 | `engine.js` | Every game rule. Pure logic: no DOM, no storage, no clock. Takes the player state (plain JSON) and returns events. Meant to move into the iOS app as it is. |
 | `ui.css` | The whole look: colour tokens, skins, frames, bars, buttons, every screen and every animation. |
 | `ui.js` | Storage, cloud save, backup, screens, windows and actions. It talks to the app shell through `window.AppShell` and works without one. |
-| `app.src.html` | The page as a Claude Artifact takes it: the fixed layers (backdrop, tab bar, window layer, toasts, spark canvas) between `<!--BODY-->` marks, and the placeholders `/*CSS*/`, `/*ENGINE*/` and `/*UI*/`. |
+| `app.src.html` | The page as a Claude Artifact takes it: the fixed layers (backdrop, the frame `#view` the page scrolls in, the small header, tab bar, the layer windows fade out on, window layer, toasts, spark canvas) between `<!--BODY-->` marks, and the placeholders `/*CSS*/`, `/*ENGINE*/` and `/*UI*/`. |
 | `pwa/` | What turns the page into an installable web app. `shell.html` is the full document with the iPhone and Android tags, `pwa.css` the styles a standalone app needs (notch, home bar, no text selection), `pwa.js` the shell (`window.AppShell`: versions, updates, installing), `sw.js` the service worker, `manifest.webmanifest` the web app manifest, `fonts/` the three typefaces (SIL Open Font License), `icons/` and `splash/` the home-screen icons and the iPhone launch pictures. |
 | `assets/` | 17 WebP pictures (about 900 KB) and `manifest.json`, which names them and gives the icon sheet's layout. |
 | `art/` | `src/` holds the masters as they came from the image model, `samples/` the three style samples. `process.py` cuts the masters into `assets/`. `app_icons.py` composes the icons and launch pictures in `pwa/` from the same art. |
@@ -37,7 +37,7 @@ or to move progress between a phone and a PC, use **System, Backup** (see [Backu
 | `tests/engine.test.js` | 74 rule tests. `node tests/engine.test.js` |
 | `tests/sim.js` | Plays up to 800 days for several player types and prints the pace. `node tests/sim.js` |
 | `tests/ui.test.js` | 28 checks that drive the Claude Artifact form in a phone-sized headless browser, including two devices sharing a stand-in cloud, reduced motion, and every picture loading. |
-| `tests/pwa.test.js` | 22 checks that drive the installable web app the way a phone does: install tags and manifest, offline play, new versions (in use, while opening, half deployed, second window), backup and restore, the notch, and three screen sizes. |
+| `tests/pwa.test.js` | 23 checks that drive the installable web app the way a phone does: install tags and manifest, offline play, new versions (in use, while opening, half deployed, second window), backup and restore, the notch, the tab bar while scrolling and typing, and three screen sizes. |
 | `tests/gallery.js` | Takes pictures of every screen and reward moment for looking at the design. `node tests/gallery.js [scene ...] [--out dir] [--scale 2] [--width 400]` |
 | `tests/serve.js` | The small server the browser tests use. It serves either form, and can swap the site for a "new deploy" or go offline. |
 | `.github/workflows/deploy.yml` | Runs the rule tests and the build, then publishes `dist/site` on GitHub Pages. |
@@ -124,9 +124,8 @@ insets. It has not been run on a real iPhone or in Safari.
 - Icons are one sprite (`assets/glyphs.webp`, 5 by 4 cells) used as a CSS mask, so they take the
   text colour. `ic('name')` in `ui.js` picks the cell; the names are the `GLYPHS` list, which has
   to match `manifest.json`. Painted objects are plain images through `ob('name')`.
-- The screen is redrawn after every tap. Looping animations stay in step through `--now`, bars and
-  rings start from their last value (`fill()`, `moved()`), and one-shot effects fire only when a
-  value really changed (`changed()`).
+- The screen is described as HTML after every tap and patched in place (`morph()` in `ui.js`), so
+  what stays on screen stays the same element. See Motion below.
 - Sparks are drawn on one fixed canvas (`burst()`, `burstAt()`), in the colours of the current skin.
 - With "reduce motion" switched on, every animation is cut to nothing, numbers do not count up and
   no sparks are drawn. Everything still shows.
@@ -139,12 +138,51 @@ a picture, replace its master in `art/src/`, run `python3 art/process.py`, then 
 
 **Changes to how the screens work**
 
-- The quest list shows the buttons of one task at a time. It opens the first unfinished task, moves
-  on when a task is done, and a tap on any row opens that one.
+- The quest list shows the buttons of one task at a time. It opens the first unfinished task, and a
+  tap on any row opens that one. A task that is finished stays open for a moment, stamped, then folds
+  away while the next one opens.
 - After a clear the reward waits in a chest: "Open the chest" shows the Essence, the XP rows and the
   "how did it feel" question.
 - The tab bar has icons, and a red dot when a Rank Trial can start, a skill slot is free, a
   re-test or a backup is due, or a new version of the app is waiting.
+
+## Motion
+
+A few rules keep every screen moving the same way.
+
+- **One set of curves.** `ui.css` names them (`--ease-out`, `--ease-in`, `--ease-inout`, `--spring`)
+  and `ui.js` uses the same ones (`EASE`). Things that arrive slow down into place, things that
+  leave speed up and are quicker than arrivals, things that change in place ease in and out. Only
+  rewards and presses overshoot.
+- **Durations by weight.** A press goes down in 70 ms. Small changes take 140 to 240 ms. A card
+  unfolding or the tab light gliding takes about 400 ms, a reward window about half a second.
+- **Presses.** Every button goes down at once and springs back when the finger lifts. On an iPhone
+  the page listens for touches so the pressed state shows at all.
+- **Nothing is redrawn.** `render()` describes the screen as HTML and `morph()` patches the page,
+  matching elements by `data-key` (or id). A bar slides to its new width, a field keeps its text and
+  its keyboard, a pressed button springs back instead of being replaced. Effects are asked for in
+  the HTML (`data-fx` for bump, stamp, node, lit and enter; `data-roll` for a number that counts to
+  its new value) and played once after the patch with the Web Animations API. `changed()` and
+  `roll()` remember what each part showed last, so an effect only plays when a value really changed.
+- **Feedback where the thumb is.** "+5" rises off the button that was pressed. "+12 XP" appears
+  beside the level bar that is in view and adds up over quick taps. A finished card flashes and is
+  stamped. On an iPhone with iOS 18 or later, taps and finished tasks give a light haptic tick
+  (`haptic()`); Android phones vibrate briefly.
+- **One thing after another.** A finished card holds for a beat, then folds while the next one
+  unfolds. A window rises and its parts follow 45 ms apart. A window that closes fades out on a
+  layer of its own (`#ghost`), so the page or the next window is live at once.
+- **Moving between tabs.** Each tab keeps its scroll position. The page slides toward the side of
+  the tab that was tapped (View Transitions where the browser has them, a short slide elsewhere)
+  while the light behind the tabs glides across. The open tab, or the small header that follows the
+  page down, takes you back to the top.
+- **The frame.** The document itself never scrolls. The page scrolls inside `#view`, a fixed frame,
+  and the tab bar, the small header and the windows are laid out against it and pinned to what is
+  really visible (`--vv-top`, `--vv-gap`). While a field is being typed in on a phone, the tab bar
+  and the small header step aside (`.typing`), messages ride just above the keyboard (`--kb`), and
+  whatever the keyboard moved is put back when it goes. This is what keeps the tab bar on the
+  bottom edge on an iPhone, where it used to stay halfway up the screen after the keyboard closed.
+- **Reduced motion.** With "reduce motion" switched on, nothing moves, numbers do not count, no
+  sparks are drawn and tabs switch at once. Everything still shows.
 
 ## Rules in this build
 
