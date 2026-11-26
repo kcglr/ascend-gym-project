@@ -25,6 +25,9 @@
   let tab = 'quest', sub = 'card', logSel = null, armed = null, modal = null, queue = [];
   let pretestMem = null;
   const openDetails = {};
+  // The installable web app wraps the page in a shell (pwa/pwa.js) that knows about versions and installing. Inside Claude there is none.
+  const shell = window.AppShell || null;
+  const IOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 
   // ---------- storage on this device ----------
   const store = {
@@ -203,7 +206,7 @@
     if (!s || typeof s.json !== 'string' || Date.now() - (s.at || 0) > 30 * 86400000) return null;
     let st = null;
     try { st = JSON.parse(s.json); } catch (e) {}
-    return valid(st) ? { at: s.at, state: st } : null;
+    return valid(st) ? { at: s.at, why: s.why, state: st } : null;
   }
   function syncText() {
     if (testing()) return 'The test clock is running, so nothing is sent to your cloud save until you go back to today.';
@@ -214,11 +217,94 @@
       case 'readonly': return 'Cloud save is not available with your access to this page. Progress is kept in this browser on this device only.';
       case 'full': return 'The cloud save is full, so new progress is kept in this browser on this device only.';
       case 'newer': return 'A newer version of this page has saved your progress. Reload the page to continue with it.';
-      default: return storageOk ? 'Progress is saved in this browser on this device only.' : 'This browser is blocking storage, so progress will be lost when you close the page.';
+      default: return !storageOk ? 'This browser is blocking storage, so progress will be lost when you close the page.'
+        : 'Progress is saved in this ' + (shell && shell.standalone ? 'app' : 'browser') + ' on this device only.' + (shell ? ' A backup file is the only copy outside it.' : '');
     }
   }
   function syncUI() { const el = $('#sync-line'); if (el) el.textContent = syncText(); }
 
+  // ---------- backup: the whole save as one file ----------
+  // Outside Claude there is no cloud save, so the copy on this device is the only one. A backup is that copy as a
+  // file the person keeps wherever they like, and it is also how progress moves to another phone or to a PC.
+  // The file is plain JSON, { app, format, exportedAt, state }, where state is the engine's player state as it is,
+  // so the iOS app can read the same file later.
+  const BACKUP = { app: 'ascend-daily-quest', format: 1, firstDays: 7, everyDays: 14, maxBytes: 4000000 };
+  let pending = null; // a backup that was read and waits to be confirmed
+  const backupText = () => JSON.stringify({ app: BACKUP.app, format: BACKUP.format, exportedAt: new Date().toISOString(), name: state.name, level: state.level, rank: E.RANKS[state.rank].id, state });
+  // Answers { state, at } for a usable backup, or { why } with what is wrong with it.
+  function readBackup(text) {
+    let o = null;
+    try { o = JSON.parse(String(text || '').replace(/^\uFEFF/, '').trim()); } catch (e) {}
+    if (!o || typeof o !== 'object') return { why: 'That is not a backup of this app.' };
+    const s = o.app === BACKUP.app ? o.state : o; // the bare player state is accepted too
+    const made = o.app === BACKUP.app ? Date.parse(o.exportedAt) : NaN;
+    if ((o.app === BACKUP.app && o.format > BACKUP.format) || (s && typeof s.v === 'number' && s.v > E.VERSION)) return { why: 'This backup comes from a newer version of the app. Update the app first, then restore it.' };
+    if (s && typeof s.v === 'number' && s.v < E.VERSION) return { why: 'This backup comes from an earlier version of the game and can no longer be read.' };
+    if (!valid(s)) return { why: 'That is not a backup of this app, or the file is damaged.' };
+    delete s.debugOffset;
+    try { // a save can pass the check and still be broken deeper down, so a copy is played forward before it is trusted
+      const probe = JSON.parse(JSON.stringify(s));
+      E.ensureDay(probe, E.gameDay(new Date()));
+      const d = E.today(probe);
+      E.score(d); E.breakdown(probe, d); E.stats(probe); E.liveStreak(probe); E.trialInfo(probe); E.restInfo(probe); E.hallInfo(probe);
+      if (!drawable(probe)) throw new Error('screens');
+    } catch (e) { return { why: 'That backup is damaged and cannot be used.' }; }
+    return { state: s, at: isFinite(made) ? made : s.savedAt || 0 };
+  }
+  // Draws every screen for a save without showing any of it. A save that would break a screen is found here,
+  // before it replaces the one that works.
+  function drawable(s) {
+    const keep = [state, qsel, qselDay, Object.assign({}, shown)];
+    try {
+      state = s;
+      hud(); questScreen(); cardView(); titlesView(); skillsView(); shopView(); logScreen(); hallScreen(); systemScreen();
+      return true;
+    } catch (e) { return false; }
+    finally {
+      [state, qsel, qselDay] = keep;
+      for (const k of Object.keys(shown)) delete shown[k];
+      Object.assign(shown, keep[3]);
+    }
+  }
+  // A backup is worth a reminder a week after starting, and then every two weeks. Never while a cloud save is doing the job.
+  function backupDue() {
+    if (!state || testing() || (cloud.api && !['none', 'readonly', 'full'].includes(cloud.status))) return false;
+    return meta.backupAt ? Date.now() - meta.backupAt > BACKUP.everyDays * 86400000 : E.daysBetween(state.created, state.lastDay) >= BACKUP.firstDays;
+  }
+  function backupLine() {
+    if (!meta.backupAt) return 'No backup yet.';
+    const d = Math.floor((Date.now() - meta.backupAt) / 86400000);
+    return 'Last backup: ' + (d <= 0 ? 'today' : d === 1 ? 'yesterday' : plural(d, 'day') + ' ago') + '.';
+  }
+  const backedUp = () => { meta.backupAt = Date.now(); saveMeta(); };
+  // Hands the backup over as a file. Answers 'shared', 'saved', 'cancelled' or 'failed'.
+  async function saveFile(name, text) {
+    if (IOS && navigator.share && navigator.canShare) { // an iPhone app on the home screen cannot download: the share sheet (Save to Files, AirDrop, Mail) is its way out
+      for (const [type, as] of [['application/json', name], ['text/plain', name.replace(/\.json$/, '.txt')]]) {
+        let file = null, can = false;
+        try { file = new File([text], as, { type }); can = navigator.canShare({ files: [file] }); } catch (e) {}
+        if (!can) continue;
+        try { await navigator.share({ files: [file] }); return 'shared'; }
+        catch (e) { return e && e.name === 'AbortError' ? 'cancelled' : 'failed'; }
+      }
+    }
+    // Inside Claude the page is boxed in and a download goes nowhere. In an iPhone app on the home screen a download
+    // would put the file in place of the app, with no way back. Both get the backup as text instead.
+    if (cloud.api || (IOS && shell && shell.standalone)) return 'failed';
+    try {
+      const url = URL.createObjectURL(new Blob([text], { type: 'application/json' }));
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.hidden = true;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      return 'saved';
+    } catch (e) { return 'failed'; }
+  }
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); return true; } catch (e) {}
+    try { const box = $('#bk-out'); if (box) { box.focus(); box.select(); return document.execCommand('copy'); } } catch (e) {}
+    return false;
+  }
 
   // ---------- art ----------
   // Everything painted lives in assets/. Icons are one sprite of masks, tinted with the text colour.
@@ -549,6 +635,56 @@
       <button class="btn ghost wide" data-act="close-modal">Not yet</button>`, 'center warnwin');
   }
 
+  // ---------- backup and restore windows ----------
+  // The backup as text, for when no file can be handed over (inside Claude, or when sharing is refused).
+  function backupTextModal(text) {
+    overlay('bktext', `<div class="win-head">${ic('shield')}<div><h1 class="win-title small">Backup as text</h1><div class="win-sub">Your whole progress, to copy.</div></div></div>
+      <div class="form">
+        <p class="note">A file cannot be saved from here. Copy all of this text and keep it somewhere safe, such as a note or an email to yourself. To bring the progress back, paste it under Restore a backup.</p>
+        <textarea class="field" id="bk-out" rows="5" readonly spellcheck="false" aria-label="Backup text">${esc(text)}</textarea>
+        <button class="btn primary" data-act="backup-copy" data-focus>Copy the text</button>
+        <button class="btn ghost" data-act="close-modal">Done</button>
+      </div>`);
+  }
+  function restoreModal() {
+    pending = null;
+    overlay('restore', `<div class="win-head">${ic('shield')}<div><h1 class="win-title small">Restore a backup</h1><div class="win-sub">Continue from saved progress.</div></div></div>
+      <div class="form">
+        <p class="note">Choose the backup file you saved, or paste the backup text.</p>
+        <button class="btn primary" data-act="backup-pick" data-focus>Choose a backup file</button>
+        <input class="offscreen" type="file" id="bk-file" accept=".json,.txt,application/json,text/plain" tabindex="-1" aria-hidden="true">
+        <label>Backup text<textarea class="field" id="bk-text" rows="4" placeholder="Paste it here" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></label>
+        <p class="note bad" id="bk-err" role="alert" hidden></p>
+        <button class="btn" data-act="backup-read">Read the pasted text</button>
+        <button class="btn ghost" data-act="backup-cancel">Cancel</button>
+      </div>`);
+  }
+  function backupError(msg) {
+    const el = $('#bk-err');
+    if (el) { el.textContent = msg; el.hidden = false; } else toast(msg, 'warn');
+  }
+  // Reads a backup that was picked or pasted, and asks before anything is replaced.
+  function tryBackup(text) {
+    const res = readBackup(text);
+    if (res.why) { backupError(res.why); return; }
+    pending = res;
+    const s = res.state, gap = Math.max(0, E.daysBetween(s.lastDay, todayKey()));
+    const rows = [['Hunter', esc(s.name)], ['Rank and level', E.RANKS[s.rank].id + ' rank, level ' + s.level], ['Streak', plural(s.streak, 'day')], ['Total XP', num(s.totalXp)], ['Last played', dateLabel(s.lastDay)]];
+    if (res.at) rows.push(['Backup made', dateLabel(E.dayKey(new Date(res.at)))]);
+    const notes = [];
+    if (state) notes.push('It replaces the progress on this device: <b>' + esc(state.name) + ', level ' + state.level + '</b>. That copy stays under System, Data for 30 days.');
+    if (gap > 0) notes.push(plural(gap, 'day') + ' passed since this backup was last played. ' + (gap === 1 ? 'It is' : 'They are') + ' scored like any day away from training.');
+    if (!notes.length) notes.push('You continue exactly where this backup stopped.');
+    overlay('restore2', `<div class="label">Backup found</div>
+      <div class="stage low"><i class="rays"></i>${crest(s.rank, E.auraOf(s))}</div>
+      <h2 class="big-word mid">RESTORE?</h2>
+      <div class="rewards">${rewardRows(rows)}</div>
+      ${notes.map(n => `<p class="note">${n}</p>`).join('')}
+      <button class="btn primary wide" data-act="backup-apply" data-focus>Restore this backup</button>
+      <button class="btn ghost wide" data-act="backup-cancel">Cancel</button>`, 'center');
+  }
+  const fileText = f => f.text ? f.text() : new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result)); r.onerror = rej; r.readAsText(f); });
+
   // ---------- screens ----------
   const myCrest = cls => crest(state.rank, E.auraOf(state), (cls || '') + (state.hard ? ' hard' : ''), state.rank >= 4);
   const noticeIcon = cls => /\bwarn\b/.test(cls) ? 'skull' : /\bok\b/.test(cls) ? 'clear' : /\bgold\b/.test(cls) ? 'trial' : 'system';
@@ -559,6 +695,10 @@
 
   function testBar() {
     return testing() ? `<div class="testbar"><span>Test clock <b>+${plural(state.debugOffset, 'day')}</b>. Nothing done here is kept.</span><button class="btn small" data-act="unskip">Back to today</button></div>` : '';
+  }
+  // A new version of the app is downloaded and waiting. Only the installable web app has versions.
+  function updateBar() {
+    return shell && shell.updateReady ? '<div class="testbar upd"><span>A new version of the app is ready.</span><button class="btn small" data-act="app-update">Update</button></div>' : '';
   }
   function hud() {
     const need = E.xpForNext(state.level), max = !isFinite(need), live = E.liveStreak(state);
@@ -929,6 +1069,30 @@
       + panel('', body + '<p class="note">In this version the Hall is only its gate. Rankings, friends and guilds need accounts and a server, so they come with the iOS app.</p>');
   }
 
+  // How to put the app on the home screen, for someone who is still in a browser tab. Empty when there is nothing to say.
+  function installNote() {
+    if (!shell || shell.standalone) return '';
+    if (shell.canInstall) return banner('', 'Install the app', 'It gets its own icon, opens full screen and works without a connection. Your progress stays as it is.', '<button class="btn small" data-act="app-install">Install</button>', 'star');
+    if (!shell.ios) return '';
+    return banner('', 'Add it to your Home Screen', 'In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>, and open Ascend from its icon. '
+      + (state ? 'The app there starts empty. To take this progress along, save a backup here and restore it there.' : 'Do this before you start: the app on the Home Screen keeps its own progress.'), '', 'star');
+  }
+  function appPanel() {
+    if (!shell) return '';
+    const ready = shell.updateReady;
+    return panel('App', (ready ? banner('ok', 'A new version is ready', 'Updating takes a moment and keeps your progress.', '<button class="btn small" data-act="app-update">Update now</button>', 'star') : '')
+      + `<p class="note">Version ${esc(shell.version)}${shell.built ? ' of ' + dateLabel(shell.built) : ''}. ${shell.standalone ? 'Installed on this device.' : 'Running in the browser.'}${shell.offline ? ' It opens without a connection.' : ''}</p>`
+      + installNote()
+      + (ready ? '' : '<button class="btn" data-act="app-check">Check for updates</button>'));
+  }
+  function backupPanel() {
+    const due = backupDue();
+    return panel('Backup', `<p class="note">A backup is your whole progress as one small file. Keep it somewhere safe, or use it to move your progress to another phone or to a PC.</p>
+      <p class="note${due ? ' due' : ''}" id="bk-line">${backupLine()}${due ? ' This device holds the only copy of your progress.' : ''}</p>
+      <button class="btn${due ? ' gold' : ''}" data-act="backup-save">Save a backup</button>
+      <button class="btn ghost" data-act="backup-open">Restore a backup</button>`);
+  }
+
   function systemScreen() {
     const since = E.daysBetween(state.testDay, state.lastDay), due = E.retestDue(state);
     const hard = state.hard
@@ -945,12 +1109,14 @@
       + panel('Injured or sick', sick)
       + panel('Awakening Test', `<p class="note">Last test: ${dateLabel(state.testDay)}${since ? ', ' + plural(since, 'day') + ' ago' : ''}. ${due ? '<b>A re-test is due.</b>' : 'A re-test is suggested every four weeks.'} It places each task again: a better result jumps a tier, and stats never go down.</p>
         <button class="btn" data-act="retest">Retake the Awakening Test</button>`)
+      + appPanel()
+      + backupPanel()
+      + panel('Data', `<p class="note" id="sync-line">${esc(syncText())}</p>
+        ${stash ? `<div class="opt"><span class="o-main"><b>Earlier copy on this device</b><small>Level ${stash.state.level}, last played ${dateLabel(stash.state.lastDay)}. It was replaced by ${stash.why === 'backup' ? 'a backup' : stash.why === 'swapped by hand' ? 'the copy you switched to' : 'your cloud save'} on ${dateLabel(E.dayKey(new Date(stash.at)))}.</small></span><button class="btn small ${armed === 'stash' ? 'on' : ''}" data-act="stash-use">${armed === 'stash' ? 'Confirm' : 'Use it'}</button></div>` : ''}
+        <button class="btn danger" data-act="reset">${armed === 'reset' ? 'Tap again to erase everything' : 'Erase all progress'}</button>`)
       + panel('Testing tools', `<p class="note">For trying the prototype. Skipping moves the game clock one day ahead, and an unfinished quest is scored as it stands. Going back to today throws away everything done while skipping.</p>
         <button class="btn" data-act="skip">Skip to tomorrow</button>
         ${testing() ? '<button class="btn ghost" data-act="unskip">Back to today (+' + plural(state.debugOffset, 'day') + ' skipped)</button>' : ''}`)
-      + panel('Data', `<p class="note" id="sync-line">${esc(syncText())}</p>
-        ${stash ? `<div class="opt"><span class="o-main"><b>Earlier copy on this device</b><small>Level ${stash.state.level}, last played ${dateLabel(stash.state.lastDay)}. It was replaced by your cloud save on ${dateLabel(E.dayKey(new Date(stash.at)))}.</small></span><button class="btn small ${armed === 'stash' ? 'on' : ''}" data-act="stash-use">${armed === 'stash' ? 'Confirm' : 'Use it'}</button></div>` : ''}
-        <button class="btn danger" data-act="reset">${armed === 'reset' ? 'Tap again to erase everything' : 'Erase all progress'}</button>`)
       + '<p class="note fine">Prototype 2, rules from the design doc of 26 Nov 2026. GPS and Apple Health runs, reminders and the full Hunter Hall belong to the iOS app.</p>';
   }
 
@@ -961,12 +1127,12 @@
   // A red dot on a tab means something there is waiting for a decision.
   function tabDots() {
     const freeSkill = E.skillSlots(state) > state.skills.length && E.SKILLS.some(k => !k.inactive && state.level >= k.level && !state.skills.includes(k.id));
-    return { hunter: E.trialInfo(state).canStart || freeSkill, system: E.retestDue(state) };
+    return { hunter: E.trialInfo(state).canStart || freeSkill, system: E.retestDue(state) || backupDue() || !!(shell && shell.updateReady) };
   }
   function render() {
     applySkin();
     if (!started) return;
-    if (!state) { tabs.hidden = true; app.innerHTML = ''; if (modal !== 'onboard') onboarding(); return; }
+    if (!state) { tabs.hidden = true; app.innerHTML = ''; if (!modal) onboarding(); return; } // a window that is open (restoring a backup) stays
     tabs.hidden = false;
     const dots = tabDots();
     document.querySelectorAll('.tab').forEach(b => {
@@ -980,7 +1146,7 @@
     const body = tab === 'hunter' ? hunterScreen() : tab === 'log' ? logScreen() : tab === 'hall' ? hallScreen() : tab === 'system' ? systemScreen() : questScreen();
     app.style.setProperty('--now', (performance.now() / 1000).toFixed(2)); // looping effects pick up where they were instead of restarting
     app.dataset.tab = tab;
-    app.innerHTML = testBar() + hud() + body;
+    app.innerHTML = updateBar() + testBar() + hud() + body;
     for (const id of Object.keys(typed)) { const i = document.getElementById(id); if (i) i.value = typed[id]; } // a half-typed amount survives the redraw
     if (keep) for (const el of app.querySelectorAll('[data-act="' + keep[0] + '"]')) {
       if ((el.dataset.id || '') === keep[1] && (el.dataset.n || '') === keep[2] && (el.dataset.kind || '') === keep[3] && !el.disabled) { try { el.focus({ preventScroll: true }); } catch (e) {} break; }
@@ -1028,6 +1194,7 @@
         <div class="ka-text"><div class="label">System notice</div><h1 class="win-title">Daily Quest</h1><div class="win-sub"><span>${old ? 'System update.' : 'You have qualified as a Player.'}</span></div></div>
       </div>
       ${intro}
+      <div class="slot" id="ob-install">${installNote()}</div>
       ${banner('', 'Before you start', 'This is a training game, not medical advice. If you have a heart or joint condition, are coming back from an injury, or are not sure, check with a doctor first. Stop if you feel sharp pain, dizziness or chest tightness.', '', 'shield')}
       <div class="form" id="testform">
         <label>Hunter name<input class="field" id="t-name" maxlength="20" placeholder="Player" autocomplete="off" value="${old ? esc(old.name || '') : ''}"></label>
@@ -1035,6 +1202,7 @@
         <p class="note">Four short tests. Do them fresh, or enter honest recent numbers. You can re-test later.</p>
         ${testForm(old ? { pushups: old.test && old.test.pushups, runMax: old.test && old.test.run } : null)}
         <button class="btn primary" data-act="begin">${old ? 'Continue the climb' : 'Accept the quest'}</button>
+        <button class="btn ghost" data-act="backup-open">I have a backup to restore</button>
       </div>
     </div></div>`;
     previewTest();
@@ -1245,13 +1413,75 @@
     },
     reset(id, el, was) {
       if (was !== 'reset') { armed = 'reset'; render(); return; }
-      meta.dead = meta.dead.concat(state.sid).slice(-30); saveMeta();
+      meta.dead = meta.dead.concat(state.sid).slice(-30); delete meta.backupAt; saveMeta();
       state = null; queue = []; pretestMem = null; logSel = null; qsel = null; tab = 'quest'; sub = 'card';
       store.del(KEY); store.del(PRETEST); store.del(STASH); store.del(V1KEY); store.del(V1KEY + '.done');
       cloudDirty(true);
       closeLayer(); render();
     },
+    // ----- backup -----
+    async 'backup-save'() {
+      if (testing()) { toast('Go back to today first. The test clock is running.', 'warn'); return; }
+      const text = backupText();
+      const how = await saveFile('ascend-backup-' + E.dayKey(new Date()) + '.json', text);
+      if (how === 'cancelled') return;
+      if (how === 'failed') { if (!modal) backupTextModal(text); return; }
+      backedUp(); render();
+      toast(how === 'shared' ? 'Backup handed over. Keep it somewhere safe.' : 'Backup saved to your downloads.', 'ok', ic('shield'));
+    },
+    async 'backup-copy'() {
+      const box = $('#bk-out');
+      if (!box) return;
+      if (await copyText(box.value)) { backedUp(); render(); toast('Copied. Paste it somewhere safe.', 'ok', ic('shield')); }
+      else { try { box.focus(); box.select(); } catch (e) {} toast('Copying is blocked here. Copy the selected text by hand.', 'warn'); }
+    },
+    'backup-open'() {
+      if (testing()) { toast('Go back to today first. The test clock is running.', 'warn'); return; }
+      restoreModal();
+    },
+    'backup-pick'() { const f = $('#bk-file'); if (f) f.click(); },
+    'backup-read'() {
+      const box = $('#bk-text'), text = ((box || {}).value || '').trim();
+      if (!text) { backupError('Paste the backup text first, or choose the file.'); if (box) box.focus(); return; }
+      tryBackup(text);
+    },
+    'backup-cancel'() { pending = null; closeLayer(); if (state) nextModal(); else render(); },
+    'backup-apply'() {
+      const p = pending, cur = state;
+      pending = null;
+      if (!p || testing()) { closeLayer(); render(); return; }
+      const back = p.state;
+      if (cur) store.set(STASH, JSON.stringify({ at: Date.now(), why: 'backup', json: JSON.stringify(cur) })); // the copy that is replaced stays recoverable
+      // A player that was erased on this account comes back under a new id, or another device would erase it again.
+      if (meta.dead.includes(back.sid)) back.sid = 'p' + (Math.floor(Math.random() * 2147483000) + 1).toString(36) + 'r';
+      if (cur && cur.sid !== back.sid) meta.dead = meta.dead.concat(cur.sid).slice(-30); // this player replaces the other one everywhere
+      back.rev = Math.max(back.rev || 0, (cur && cur.rev) || 0, (cloud.snap && cloud.snap.rev) || 0);
+      meta.backupAt = Date.now(); // the file that was just read is as fresh as the progress
+      saveMeta();
+      state = back; queue = []; logSel = null; qsel = null; tab = 'quest'; sub = 'card';
+      closeLayer();
+      const ev = E.ensureDay(state, todayKey());
+      save(); render(); window.scrollTo(0, 0);
+      toast('Backup restored.', 'ok', ic('shield')); handle(ev);
+    },
+    // ----- the installable web app -----
+    'app-update'() { if (shell) { toast('Updating.', 'ok'); shell.update(); } },
+    async 'app-check'(id, el) {
+      if (!shell) return;
+      if (el) { el.disabled = true; el.textContent = 'Checking'; }
+      const res = await shell.check();
+      render();
+      if (res === 'ready') toast('A new version is ready.', 'ok', ic('star'));
+      else if (res === 'current') toast('You have the latest version.', 'ok', ic('clear'));
+      else if (res === 'offline') toast('No connection. Try again when you are online.', 'warn');
+      else toast('This browser keeps no copy of the app, so it always loads the latest version.');
+    },
+    async 'app-install'() {
+      if (shell && await shell.install()) toast('Installed. Open Ascend from its icon.', 'ok', ic('star'));
+    },
   };
+  // What can be done before there is a save: starting, and restoring a backup.
+  const FREE = new Set(['begin', 'backup-open', 'backup-pick', 'backup-read', 'backup-cancel', 'backup-apply', 'app-install']);
 
   document.addEventListener('click', e => {
     const tb = e.target.closest('.tab');
@@ -1260,13 +1490,25 @@
     if (!el || el.disabled) return;
     const was = armed, fn = ACTS[el.dataset.act];
     armed = null;
-    if (fn && (state || el.dataset.act === 'begin')) fn(el.dataset.id, el, was);
+    if (fn && (state || FREE.has(el.dataset.act))) fn(el.dataset.id, el, was);
+  });
+  document.addEventListener('change', async e => { // a backup file was picked
+    const inp = e.target;
+    if (!inp || inp.id !== 'bk-file') return;
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    let text = null;
+    if (file.size <= BACKUP.maxBytes) try { text = await fileText(file); } catch (err) {}
+    try { inp.value = ''; } catch (err) {} // the same file can be picked again
+    if (modal !== 'restore') return;
+    if (text == null) backupError(file.size > BACKUP.maxBytes ? 'That file is too large to be a backup.' : 'That file could not be read.');
+    else tryBackup(text);
   });
   document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#testform')) previewTest(); });
   document.addEventListener('toggle', e => { const k = e.target.dataset && e.target.dataset.keep; if (k) openDetails[k] = e.target.open; }, true);
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && modal && modal !== 'onboard') {
-      const b = layer.querySelector('[data-act="close-modal"], [data-act="tap-cancel"], [data-act="pl-cancel"]');
+      const b = layer.querySelector('[data-act="close-modal"], [data-act="tap-cancel"], [data-act="pl-cancel"], [data-act="backup-cancel"]');
       if (b) b.click();
       return;
     }
@@ -1282,8 +1524,19 @@
     if (!started || !state) return;
     const ev = E.ensureDay(state, todayKey());
     if (ev.length) { save(); render(); handle(ev); }
+    else if (shellLate && !typing()) { shellLate = false; render(); }
     else { const cd = $('#cd'); if (cd) cd.textContent = countdown(); }
   }
+  // The shell reports a new version, an install, or a change of window. The screen follows, but never under someone's typing.
+  let shellLate = false;
+  const typing = () => { const a = document.activeElement; return !!a && app.contains(a) && /^(INPUT|TEXTAREA)$/.test(a.tagName); };
+  if (shell) shell.onChange(() => {
+    if (!started) return;
+    const slot = $('#ob-install');
+    if (slot) slot.innerHTML = installNote();
+    if (!state) return;
+    if (typing()) shellLate = true; else render();
+  });
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) tick();
     else if (cloud.dirty) { clearTimeout(cloud.timer); push(); } // leaving: send what is waiting

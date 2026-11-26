@@ -681,6 +681,40 @@ async function test(name, fn) {
     await F.ctx.close();
   });
 
+  await test('inside Claude a backup is text to copy, and a restored backup becomes the cloud save', async () => {
+    const B = await open({ cloud: { uid: 'u_backup' } });
+    const p = B.page, cloudRev = () => { const raw = docs.get('data/users/u_backup/save'); return raw ? JSON.parse(raw).rev : 0; };
+    await onboard(p, { name: 'Boxed', pushups: 12 });
+    await layerAct(p, 'begin');
+    await p.waitForSelector('.quests');
+    await p.click('.tab[data-tab="system"]');
+    assert.equal(await p.evaluate(() => typeof window.AppShell), 'undefined'); // the page has no app shell here
+    assert.doesNotMatch(await text(p, '#app'), /Check for updates|Home Screen/);
+    assert.equal(await p.locator('.tab[data-tab="system"].dot').count(), 0);
+    await act(p, 'backup-save'); // a download goes nowhere inside Claude, so the backup is shown
+    await p.waitForSelector('#bk-out');
+    const backup = await p.inputValue('#bk-out');
+    assert.equal(JSON.parse(backup).state.name, 'Boxed');
+    await layerAct(p, 'close-modal');
+    await p.click('.tab[data-tab="quest"]');
+    for (let i = 0; i < 4; i++) await p.click('#app [data-act="add"][data-id="pushups"][data-n="1"]');
+    const played = await stateOf(p);
+    await waitFor(() => cloudRev() === played.rev, 'the played copy to reach the cloud');
+    await p.click('.tab[data-tab="system"]');
+    await act(p, 'backup-open');
+    await p.fill('#bk-text', backup);
+    await layerAct(p, 'backup-read');
+    await layerAct(p, 'backup-apply');
+    await p.waitForSelector('.quests');
+    const s = await stateOf(p);
+    assert.equal(s.days[s.lastDay].progress.pushups, 0);
+    assert.ok(s.rev > played.rev, 'the restored copy must outrank the cloud copy');
+    await waitFor(() => cloudRev() === s.rev, 'the restored copy to reach the cloud');
+    assert.equal(JSON.parse(JSON.parse(docs.get('data/users/u_backup/save')).json).days[s.lastDay].progress.pushups, 0);
+    assert.deepEqual(B.errors, []);
+    await B.ctx.close();
+  });
+
   console.log('The look');
   await test('reward windows and toasts still work with reduced motion', async () => {
     const C = await open({ calm: true });

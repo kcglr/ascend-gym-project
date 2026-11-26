@@ -147,6 +147,10 @@ p, h1, h2, h3 { margin: 0; }
 .note { font-size: 13px; color: var(--dim); }
 .note b { color: var(--text); font-weight: 600; }
 .note.fine { font-size: 12px; text-align: center; padding: 0 8px; }
+.note.bad { color: var(--warn); }
+.note.due { color: var(--gold); }
+.slot:empty { display: none; }
+.offscreen { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; clip-path: inset(50%); pointer-events: none; } /* a file input that is opened by a button */
 .center { text-align: center; align-items: center; }
 .tag { font: 700 10.5px/1 var(--display); letter-spacing: .1em; color: var(--gold); white-space: nowrap; }
 .tag.dim { color: var(--dim); }
@@ -205,6 +209,7 @@ p, h1, h2, h3 { margin: 0; }
   font: 600 16px/1 var(--display); color: var(--text); /* 16px keeps iPhone Safari from zooming in when a field is tapped */
 }
 .field::placeholder { color: var(--dim); opacity: .6; font-weight: 500; }
+textarea.field { display: block; min-height: 104px; padding: 10px 11px; resize: vertical; font: 500 16px/1.35 var(--body); overflow-wrap: anywhere; }
 .field:focus { outline: none; border-color: rgb(var(--g)); box-shadow: 0 0 0 3px rgb(var(--g) / .2), inset 0 0 14px rgb(var(--g2) / .22); }
 
 /* ---------- status strip ---------- */
@@ -220,6 +225,8 @@ p, h1, h2, h3 { margin: 0; }
 .testbar { --c: 8px; --edge: linear-gradient(90deg, var(--gold), rgb(var(--goldc) / .4)); --fill: rgb(var(--goldc) / .1) ; display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px 8px 12px; color: var(--gold); font-size: 12.5px; }
 .testbar::after { background: linear-gradient(rgb(var(--goldc) / .1), rgb(var(--goldc) / .1)), rgb(var(--ink)); }
 .testbar b { font-family: var(--display); }
+.testbar.upd { --edge: linear-gradient(90deg, rgb(var(--g)), rgb(var(--g) / .4)); color: rgb(var(--g)); } /* a new version of the app is waiting */
+.testbar.upd::after { background: linear-gradient(rgb(var(--g2) / .18), rgb(var(--g2) / .18)), rgb(var(--ink)); }
 
 /* ---------- key art ---------- */
 .keyart, .gate { --c: 16px; display: flex; flex-direction: column; justify-content: space-between; align-items: flex-start; }
