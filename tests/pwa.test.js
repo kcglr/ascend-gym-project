@@ -572,7 +572,7 @@ async function test(name, fn) {
     assert.equal(box.bar, 59);
     assert.ok(box.hud >= 59, 'the status strip starts under the clock');
     assert.equal(box.tabs, 40);
-    assert.equal(box.app, 60 + 34 + 24);
+    assert.equal(box.app, 72 + 34 + 24);
     await system(page);
     await page.evaluate(() => { const v = document.querySelector('#view'); v.scrollTop = v.scrollHeight; });
     const last = await page.evaluate(() => ({ note: document.querySelector('#app .note.fine').getBoundingClientRect().bottom, tabs: document.querySelector('.tabs').getBoundingClientRect().top }));

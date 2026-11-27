@@ -99,43 +99,50 @@ insets. It has not been run on a real iPhone or in Safari.
 
 ## The look
 
-The theme is the "Abyss System": dark neon system windows, cyan and violet glow, and painted art
-made for this app. The layout follows well-established fitness apps: calm screens, one clear thing
-to look at, and the details a tap away.
+The theme is the "Abyss System": dark neon system windows with cut corners and lit edges, cyan and
+violet glow, bars cut on a slant, sparks, and painted art made for this app. It is rich on purpose.
+What keeps a screen easy to take in is its order, the way well-established fitness apps do it: one
+clear thing to look at, and the rest sorted under it.
 
 **Layout rules**
 
-- **A title, one hero, then sections.** Each screen opens with its title (the only italic capital
-  heading on it) over a small caption line. At most one lit, framed panel follows: the day ring on
-  Quest, the licence on Hunter, the gate on Hunter Hall. Everything else is a titled section that
-  holds a calm card or a grouped list of rows split by hairlines, the way a settings app does it.
-- **Progress is a ring.** The day's quest is one ring with marks at 25% (no penalty), 75% (the
-  streak grows) and the chest at 100%. Each task has a small ring around its icon that closes as
-  reps come in and turns green with a check when the task is done. Each day in the Log calendar is
-  a ring that closes as far as that day got.
-- **One loud thing per screen.** Glow, italic display type and the glossy button are kept for the
-  hero, the one primary action and the reward windows. Lists, rows and settings are plain
-  sentence-case text.
-- **Details on request.** Only the open task shows its buttons. The XP breakdown folds away under
-  "Earned today". "How did it feel?" shows until it is answered. "Also today" lists only what can
-  be done today: a Rank Trial, a rest token, Overdrive, a re-test.
-- **Room.** A 20 px gutter (`--gut`), 26 px between sections (`--gap-sec`) and 10 px inside them
+- **A title, one hero, then sections.** Each screen opens with its emblem in a lit diamond, its
+  name in the italic display type, one caption line, and at most one figure on the right (the
+  streak on Quest, the Essence on Hunter). At most one hero window follows: the day ring on Quest,
+  the licence on Hunter, the gate on Hunter Hall. Everything else is a labelled section: a small
+  HUD label with a diamond and a line that fades out, then one panel or one list of small cards.
+  A panel never sits inside another panel.
+- **Nothing is repeated.** The level strip is the foot of the hero on Quest and is not carried onto
+  the other tabs. The streak, the score and the scene are one window, not three.
+- **The light is ranked.** The hero, the reward windows and the one primary button glow the most.
+  Next comes what is open or in use: the open task, the selected tab, an equipped title. Panels,
+  rows and plain buttons carry the lit edge without an outer glow, and what is locked goes dim.
+- **Progress reads at a glance.** The day's score is a neon ring. Three marks sit on it: no penalty
+  from 25%, the streak grows from 75%, and the chest at the top, which the lit part runs away from
+  and comes back to. Each task has a medal whose ring closes as reps come in and a segmented bar; a
+  finished task turns green and is stamped CLEAR. Each day in the Log calendar is a cell that fills
+  from the bottom as far as that day got.
+- **Details on request.** Only the open task shows its buttons and tags. The XP breakdown folds
+  away under "Earned today". "How did it feel?" shows until it is answered. "Also today" lists only
+  what can be done today: a Rank Trial, a rest token, Overdrive, a re-test.
+- **Room.** An 18 px gutter (`--gut`), 24 px between sections (`--gap-sec`) and 10 px inside them
   (`--gap-in`). The screens are checked from a 320 px phone to a PC, where the app keeps a
   phone-width column.
-- **Bars like a phone's own.** The tab bar and the small header that follows the page down are
-  flat, blurred strips. The small header shows level, XP and streak on Quest and the screen's name
-  everywhere else.
+- **Bars.** The tab bar is a lit strip with a framed light that glides to the selected tab. The
+  small header that follows the page down is a floating card: level, XP and streak on Quest, the
+  screen's name everywhere else.
 - **One message at a time.** Small messages ("Strength +1", a new title) wait while a reward window
   is up and come in after it closes.
 
-**Kept from the game look**
+**The game look**
 
-- Depth in layers: a painted backdrop, slow drifting motes, the hero panel with the hunter breaking
-  out of it, and a spark layer on top.
+- Depth in layers: a painted backdrop, slow drifting motes, glass panels, the hunter breaking out
+  of the hero window, and a spark layer on top.
+- System windows with a diamond on their top and bottom edge and lit wedges in two corners.
 - Rank crests that grow with the tier: E is a bare shield, C grows wings, S has a crown and halo.
 - Reward moments with a reveal: the chest is tapped open and the loot counts up, a level-up bursts,
   a rank-up cracks the old crest and slams the new one in.
-- Red dots on tabs that have something to do, and the Essence pill on Hunter.
+- Red dots on tabs that have something to do, and gold frames on what is equipped.
 
 **How it is built**
 
@@ -144,13 +151,16 @@ to look at, and the details a tap away.
   the tokens under `:root[data-skin]` and turn the painted scenes with `--hue`.
 - A mood class re-colours a whole subtree: `.gold`, `.warn`, `.ok`. Aura classes `.aura-0` to
   `.aura-5` set `--a` and `--a2` for crest glow, hero aura and the licence card.
-- Every framed thing shares one recipe at the top of `ui.css`: `::before` is the edge, `::after`
-  the surface, both cut by one chamfer polygon from `--c`. It is calm by default (a faint edge and
-  a flat fill, for `.card`, `.opts`, `.quests`, buttons) and lit for `.win`, `.hero` and `.pcard`.
-  A new framed component only joins that selector list and sets `--c`, `--edge` and `--fill`.
+- Every framed thing shares one recipe at the top of `ui.css`: `::before` is the edge (`--edge`),
+  `::after` the glass inside it (`--fill`), both cut by one chamfer polygon from `--c`. Windows and
+  panels (`.win`, `.card`) add the lit corner wedges; rows (`.opt`) take a quieter edge. A new
+  framed component only joins that selector list and sets `--c`, `--edge` and `--fill`. Because
+  both pseudo-elements are taken, anything else a framed element needs (a dot, a badge) is a child.
+- Things that are turned or placed for good use the `rotate` and `translate` properties, so an
+  effect that animates `transform` adds to them instead of replacing them.
 - Screens are put together from a few helpers in `ui.js`: `head()` for the title, `sect()` for a
-  titled section, `card()` for a calm card, `group()` and `opt()` for a list of rows, `banner()`
-  for a notice that needs a decision.
+  labelled section, `card()` for a panel, `group()` and `opt()` for a list of rows, `banner()` for
+  a notice.
 - Icons are one sprite (`assets/glyphs.webp`, 5 by 4 cells) used as a CSS mask, so they take the
   text colour. `ic('name')` in `ui.js` picks the cell; the names are the `GLYPHS` list, which has
   to match `manifest.json`. Painted objects are plain images through `ob('name')`.
@@ -168,16 +178,17 @@ a picture, replace its master in `art/src/`, run `python3 art/process.py`, then 
 
 **How the screens work**
 
-- **Quest:** the day ring, the level strip, then the task list. The list shows the buttons of one
-  task at a time. It opens the first unfinished task, and a tap on any row opens that one. A task
-  that is finished stays open for a moment, checked, then folds away while the next one opens.
+- **Quest:** the hero with the day ring and the level strip, then the task list. The list shows the
+  buttons of one task at a time. It opens the first unfinished task, and a tap on any card opens
+  that one. A task that is finished stays open for a moment, stamped, then folds away while the
+  next one opens.
 - After a clear the reward waits in a chest: "Open the chest" shows the Essence, the XP and the
   "how did it feel" question.
-- **Hunter:** a segmented control (Card, Titles, Skills, Shop). Card shows the licence, the three
-  stats and what the next rank asks for.
-- **Log:** the last five weeks as rings, with the picked day's four tasks underneath, then the
+- **Hunter:** four parts (Card, Titles, Skills, Shop) with a lit frame that glides to the one that
+  was picked. Card shows the licence, the three stats and what the next rank asks for.
+- **Log:** the last five weeks as a calendar, with the picked day's four tasks underneath, then the
   streak, the road to the full routine and lifetime totals.
-- **System:** grouped settings rows: Hunter, Training, App, Your progress, Testing.
+- **System:** settings in sections: Hunter, Training, App, Your progress, Testing.
 - The tab bar has icons, and a red dot when a Rank Trial can start, a skill slot is free, a
   re-test or a backup is due, or a new version of the app is waiting.
 
@@ -201,8 +212,8 @@ A few rules keep every screen moving the same way.
   its new value) and played once after the patch with the Web Animations API. `changed()` and
   `roll()` remember what each part showed last, so an effect only plays when a value really changed.
 - **Feedback where the thumb is.** "+5" rises off the button that was pressed. "+12 XP" appears
-  beside the level bar that is in view and adds up over quick taps. A finished task's row flashes
-  green and its ring gets a check. On an iPhone with iOS 18 or later, taps and finished tasks give a light haptic tick
+  beside the level bar that is in view and adds up over quick taps. A finished task's card flashes
+  green and the CLEAR stamp lands on it. On an iPhone with iOS 18 or later, taps and finished tasks give a light haptic tick
   (`haptic()`); Android phones vibrate briefly.
 - **One thing after another.** A finished card holds for a beat, then folds while the next one
   unfolds. A window rises and its parts follow 45 ms apart. A window that closes fades out on a
