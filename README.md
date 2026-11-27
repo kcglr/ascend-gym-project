@@ -40,7 +40,7 @@ or to move progress between a phone and a PC, use **System, Backup** (see [Backu
 | `tests/pwa.test.js` | 23 checks that drive the installable web app the way a phone does: install tags and manifest, offline play, new versions (in use, while opening, half deployed, second window), backup and restore, the notch, the tab bar while scrolling and typing, and three screen sizes. |
 | `tests/gallery.js` | Takes pictures of every screen and reward moment for looking at the design. `node tests/gallery.js [scene ...] [--out dir] [--scale 2] [--width 400]` |
 | `tests/serve.js` | The small server the browser tests use. It serves either form, and can swap the site for a "new deploy" or go offline. |
-| `.github/workflows/deploy.yml` | Runs the rule tests and the build, then publishes `dist/site` on GitHub Pages. |
+| `.github/workflows/deploy.yml` | Runs the rule tests and the build, then publishes `dist/site` on GitHub Pages. On a pull request it also runs both browser suites. |
 | `v1/` | The first prototype, kept for the tests that carry an old save over. |
 
 ## Build, test, deploy
@@ -60,7 +60,8 @@ launch pictures.
 **Deploying.** Every push to `main` runs `.github/workflows/deploy.yml`, which publishes
 `dist/site` at https://kcglr.github.io/ascend-gym-project/. Installed copies pick the new version
 up by themselves. The repository setting **Pages, Source** has to be **GitHub Actions**. A pull
-request runs the rule tests and the build without deploying.
+request runs the rule tests, the build and both browser suites without deploying, so long test
+runs happen in the pull request's checks.
 
 **The Claude Artifact form.** `dist/artifact/index.html` is the same page as a body fragment for a
 Claude Artifact, published with every `assets/*.webp` at `assets/<name>.webp` and the capabilities
