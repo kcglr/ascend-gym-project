@@ -285,7 +285,7 @@ async function test(name, fn) {
     await system(page);
     await page.click('#app [data-act="app-check"]');
     await page.waitForSelector('.testbar.upd');
-    await page.click('#app .panel [data-act="app-update"]');
+    await page.click('#app .screen [data-act="app-update"]'); // the row in System, not the bar at the top
     await becomes(page, 'b000000004');
     assert.deepEqual(errors, []);
     await done();
@@ -435,8 +435,8 @@ async function test(name, fn) {
       assert.match(await text(page, '#bk-err'), why, body.slice(0, 30));
       assert.equal(await page.locator('#layer [data-act="backup-apply"]').count(), 0);
     }
-    // the screens behind the window were not disturbed by trying those saves out
-    assert.match(await text(page, '.pname'), /Keeper/);
+    // the screens behind the window were not disturbed by trying those saves out (System holds the name in its field)
+    assert.equal(await page.inputValue('#app #in-name'), 'Keeper');
     // a file that is far too large is not even read
     const big = path.join(tmp, 'big.json');
     fs.writeFileSync(big, Buffer.alloc(4100000, 0x20));
@@ -572,7 +572,7 @@ async function test(name, fn) {
     assert.equal(box.bar, 59);
     assert.ok(box.hud >= 59, 'the status strip starts under the clock');
     assert.equal(box.tabs, 40);
-    assert.equal(box.app, 72 + 34 + 24);
+    assert.equal(box.app, 60 + 34 + 24);
     await system(page);
     await page.evaluate(() => { const v = document.querySelector('#view'); v.scrollTop = v.scrollHeight; });
     const last = await page.evaluate(() => ({ note: document.querySelector('#app .note.fine').getBoundingClientRect().bottom, tabs: document.querySelector('.tabs').getBoundingClientRect().top }));

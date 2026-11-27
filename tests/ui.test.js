@@ -80,6 +80,8 @@ async function test(name, fn) {
   }
   const act = (page, a, id) => page.click('#app [data-act="' + a + '"]' + (id ? '[data-id="' + id + '"]' : ''));
   const layerAct = (page, a) => page.click('#layer [data-act="' + a + '"]');
+  // The streak sits in the Quest header as a flame and a number; its accessible name says it in words.
+  const streakShown = page => page.getAttribute('#app .pill.streak', 'aria-label');
   // The quest list shows the buttons of one task at a time (the others are folded away). This opens a task's row
   // unless it is open already. A finished task stays open for a moment before the next one opens by itself, so the
   // tap is checked and made again if the two crossed.
@@ -184,7 +186,7 @@ async function test(name, fn) {
     s = await stateOf(p);
     assert.equal(s.days[s.lastDay].progress.situps, 0);
     assert.equal(s.totals.situps, 0);
-    assert.match(await text(p, '.chip'), /Streak 0/);
+    assert.match(await streakShown(p), /Streak 0/);
   });
 
   await test('a timed run sets the pace and clearing opens the reward screens', async () => {
@@ -220,7 +222,7 @@ async function test(name, fn) {
     assert.equal(day.cleared, true);
     assert.equal(day.felt, 'right');
     assert.ok(s.essence > 0 && s.level > 1);
-    assert.match(await text(p, '.chip'), /Streak 1/);
+    assert.match(await streakShown(p), /Streak 1/);
   });
 
   await test('every screen fits a 400 px and a 360 px phone', async () => {
@@ -279,7 +281,7 @@ async function test(name, fn) {
     await closeModals(p);
     s = await stateOf(p);
     assert.equal(s.days[s.lastDay].cleared, true);
-    assert.match(await text(p, '.chip'), /Streak 2/);
+    assert.match(await streakShown(p), /Streak 2/);
   });
 
   await test('Hard mode: on with a confirm, a failed penalty costs a level, off waits for the streak', async () => {
@@ -289,7 +291,9 @@ async function test(name, fn) {
     await layerAct(p, 'hard-go');
     let s = await stateOf(p);
     assert.equal(s.hard, true);
+    await tabTo(p, 'quest');                               // the level strip with the HARD mark lives on the Quest screen
     assert.equal(await p.locator('.hud .tag-hard').count(), 1);
+    await tabTo(p, 'system');
     await act(p, 'hard-off');
     s = await stateOf(p);
     assert.equal(s.hard, true); assert.equal(s.hardOffPending, true); // the streak is alive, so it only ends with it
@@ -670,7 +674,7 @@ async function test(name, fn) {
     assert.ok(await p.evaluate(() => !!localStorage.getItem('dailyquest.v2.stash')));
     // The copy that lost can be brought back by hand, and then it is the one the cloud keeps.
     await tabTo(p, 'system');
-    assert.match(await text(p, '#app .opt'), /Earlier copy on this device/);
+    assert.match(await text(p, '#app [data-key="s-stash"]'), /Earlier copy on this device/);
     await act(p, 'stash-use'); await act(p, 'stash-use');
     await drain(p);
     const back = await stateOf(p);
