@@ -285,7 +285,7 @@ async function test(name, fn) {
     await system(page);
     await page.click('#app [data-act="app-check"]');
     await page.waitForSelector('.testbar.upd');
-    await page.click('#app .panel [data-act="app-update"]');
+    await page.click('#app .screen [data-act="app-update"]'); // the row in System, not the bar at the top
     await becomes(page, 'b000000004');
     assert.deepEqual(errors, []);
     await done();
@@ -435,8 +435,8 @@ async function test(name, fn) {
       assert.match(await text(page, '#bk-err'), why, body.slice(0, 30));
       assert.equal(await page.locator('#layer [data-act="backup-apply"]').count(), 0);
     }
-    // the screens behind the window were not disturbed by trying those saves out
-    assert.match(await text(page, '.pname'), /Keeper/);
+    // the screens behind the window were not disturbed by trying those saves out (System holds the name in its field)
+    assert.equal(await page.inputValue('#app #in-name'), 'Keeper');
     // a file that is far too large is not even read
     const big = path.join(tmp, 'big.json');
     fs.writeFileSync(big, Buffer.alloc(4100000, 0x20));

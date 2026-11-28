@@ -1,5 +1,6 @@
 # Builds the installable web app and publishes it on GitHub Pages.
-# A push to main deploys. A pull request only runs the rule tests and the build, so a break shows before a merge.
+# A push to main deploys. A pull request runs the rule tests, the build and the two browser test suites without
+# deploying, so a break shows before a merge.
 # In the repository settings, Pages has to use "GitHub Actions" as its source.
 name: Deploy
 
@@ -35,6 +36,28 @@ jobs:
         uses: actions/upload-pages-artifact@v4
         with:
           path: dist/site
+
+  # The browser suites drive both forms of the page the way a phone does (a few minutes each). They run on pull
+  # requests and by hand; a push to main deploys without waiting for them.
+  browser-tests:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Playwright and Chromium
+        run: npm install --no-save playwright@1.63.0 && npx playwright install --with-deps chromium
+      - name: Build
+        run: node build.js
+      - name: Browser tests, Claude Artifact form
+        run: node tests/ui.test.js
+      - name: Browser tests, web app
+        run: node tests/pwa.test.js
 
   deploy:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'

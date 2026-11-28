@@ -258,7 +258,7 @@
     const keep = [state, qsel, qselDay, Object.assign({}, shown)];
     try {
       state = s;
-      hud(); questScreen(); cardView(); titlesView(); skillsView(); shopView(); logScreen(); hallScreen(); systemScreen();
+      questScreen(); cardView(); titlesView(); skillsView(); shopView(); logScreen(); hallScreen(); systemScreen();
       return true;
     } catch (e) { return false; }
     finally {
@@ -343,7 +343,8 @@
     shown[key] = value;
     return was != null && was !== value && (!upOnly || value > was) ? ` data-roll="${was}|${value}|${kind || ''}"` : '';
   }
-  const fill = (key, share) => { const w = Math.round(Math.max(0, Math.min(1, share)) * 1000) / 10 + '%'; return `<i data-key="f-${key}" style="width:${w}"></i>`; };
+  // A bar's fill is as wide as the bar and slides in from the left (--w is its share), so it moves without laying the page out again.
+  const fill = (key, share) => `<i data-key="f-${key}" style="--w:${Math.round(Math.max(0, Math.min(1, share)) * 1000) / 1000}"></i>`;
 
   // morph: makes `root` look like `html` while keeping every element that can stay. Elements are matched by
   // data-key (or id) and otherwise by tag in order. Nodes marked data-float are passing decorations and are left alone.
@@ -382,8 +383,8 @@
   // Effects asked for by the HTML. Each plays once and the request is taken off the element.
   const FX = {
     bump: el => play(el, [{ transform: 'scale(1.32)', color: token('--g') }, { transform: 'none' }], { duration: 440, easing: EASE.spring }),
-    stamp: el => play(el, [{ opacity: 0, transform: 'rotate(-7deg) scale(2.6)' }, { opacity: 1, transform: 'rotate(-7deg) scale(.9)', offset: .6 }, { opacity: 1, transform: 'rotate(-7deg) scale(1)' }], { duration: 560 }),
-    node: el => play(el.firstElementChild, [{ transform: 'rotate(45deg) scale(.4)' }, { transform: 'rotate(45deg) scale(1.5)', offset: .5 }, { transform: 'rotate(45deg) scale(1)' }], { duration: 620 }),
+    stamp: el => play(el, [{ opacity: 0, transform: 'scale(2.4)' }, { opacity: 1, transform: 'scale(.86)', offset: .6 }, { opacity: 1, transform: 'none' }], { duration: 520 }),
+    node: el => play(el.firstElementChild, [{ transform: 'scale(.4)' }, { transform: 'scale(1.55)', offset: .5 }, { transform: 'none' }], { duration: 620 }),
     lit: el => play(el, [{ transform: 'scale(.8)', filter: 'brightness(2)' }, { transform: 'scale(1.12)', offset: .45 }, { transform: 'none', filter: 'none' }], { duration: 700 }),
     enter: el => play(el, [{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 360 }),
   };
@@ -571,20 +572,27 @@
   }
 
   // ---------- events from the engine ----------
+  // One thing at a time: while a reward window is on its way, the small messages wait and follow it once the last
+  // window closes, instead of piling up on top of it. "Run complete" is left out when the CLEARED window says it.
+  let later = [];
   function handle(events) {
     if (!events || !events.length) return;
     const levels = [];
+    const big = events.some(e => e.type === 'clear' || e.type === 'level' || e.type === 'rank' || e.type === 'report');
+    const cleared = events.some(e => e.type === 'clear');
+    const say = (text, cls, icon) => { if (big || queue.length) later.push([text, cls, icon]); else toast(text, cls, icon); };
     for (const e of events) {
       if (e.type === 'xp') { if (e.amount > 0) xpGain(e.amount); }
       else if (e.type === 'task') {
-        toast(e.name + ' complete', 'ok', ic('clear')); haptic('ok');
+        if (!cleared) say(e.name + ' complete', 'ok', ic('clear'));
+        haptic('ok');
         const card = $('#app .quest[data-id="' + e.id + '"]');
         burstAt(card && card.querySelector('.q-med'), { colors: [token('--okc'), '#ffffff', token('--g')], n: 34, speed: 320 });
-        play(card, [{ boxShadow: '0 0 0 0 ' + tokenA('--okc', 0) }, { boxShadow: '0 0 34px 3px ' + tokenA('--okc', .7), offset: .28 }, { boxShadow: '0 0 0 0 ' + tokenA('--okc', 0) }], { duration: 1000 });
+        play(card, [{ backgroundColor: tokenA('--okc', 0) }, { backgroundColor: tokenA('--okc', .3), offset: .22 }, { backgroundColor: tokenA('--okc', 0) }], { duration: 1100 });
       }
-      else if (e.type === 'penaltyCleared') toast('Penalty served. The streak carries on.', 'ok', ic('shield'));
-      else if (e.type === 'stat') toast(STAT[e.stat] + ' +' + e.gain + ' (now ' + e.value + ')', '', ic(e.stat.toLowerCase()));
-      else if (e.type === 'title') toast('Title unlocked: ' + e.name, 'gold', ic('star'));
+      else if (e.type === 'penaltyCleared') say('Penalty served. The streak carries on.', 'ok', ic('shield'));
+      else if (e.type === 'stat') say(STAT[e.stat] + ' +' + e.gain + ' (now ' + e.value + ')', '', ic(e.stat.toLowerCase()));
+      else if (e.type === 'title') say('Title unlocked: ' + e.name, 'gold', ic('star'));
       else if (e.type === 'level') levels.push(e);
       else if (e.type === 'clear' || e.type === 'rank' || e.type === 'report') queue.push(e);
     }
@@ -600,6 +608,10 @@
       else if (e.type === 'clear') clearModal(e);
       else if (e.type === 'level') levelModal(e);
       else if (e.type === 'rank') rankModal(e);
+    }
+    if (!modal && !queue.length && later.length) { // the last window is fading out: the held messages come in after it, one by one
+      const held = later; later = [];
+      held.forEach((m, i) => setTimeout(() => toast(m[0], m[1], m[2]), 260 + i * 200));
     }
   }
   // A system window over the page. `cls` may carry a colour mood: "gold" or "warnwin".
@@ -701,7 +713,9 @@
   function clearModal(e) {
     const day = E.today(state), live = E.liveStreak(state);
     const item = e.chest.item ? E.ITEMS.find(x => x.id === e.chest.item) : null;
-    const rows = xpRows(E.breakdown(state, day), day);
+    const b = E.breakdown(state, day), rows = [];
+    if (b.clear > 0) rows.push(['Clear bonus', '+' + b.clear + ' XP']);
+    rows.push(['XP today', b.total, 'sum']);
     rows.push(day.penalty && !E.penaltyDone(day) ? ['Penalty extra task', 'Still open'] : ['Streak at the next reset', plural(live.n, 'day')]);
     overlay('clear', `<div class="label">${day.penalty ? 'Penalty quest' : 'Daily quest'}</div>
       <h2 class="big-word">CLEARED</h2>
@@ -717,7 +731,7 @@
         </div>
         <div class="rewards">${rewardRows(rows)}</div>
         <div class="stack wide"><div class="label">How did it feel?</div>${feltButtons(day)}</div>
-        <p class="note">${e.full ? 'That was the full routine: 100 / 100 / 100 / 5 km. This is the limit. Hold it.' : 'Your answer steers the quest. Clear 5 days out of 7 and it grows by about 10%, unless it felt too hard twice that week.'}</p>
+        <p class="note">${e.full ? 'That was the full routine: 100 / 100 / 100 / 5 km. This is the limit. Hold it.' : 'Your answer steers how fast the quest grows.'}</p>
         <button class="btn primary wide" data-act="close-modal">Claim</button>
       </div>`, 'center clearwin');
     haptic('big');
@@ -853,10 +867,14 @@
   const myCrest = cls => crest(state.rank, E.auraOf(state), (cls || '') + (state.hard ? ' hard' : ''), state.rank >= 4);
   const noticeIcon = cls => /\bwarn\b/.test(cls) ? 'skull' : /\bok\b/.test(cls) ? 'clear' : /\bgold\b/.test(cls) ? 'trial' : 'system';
   const slug = t => String(t).replace(/<[^>]*>/g, '').replace(/[^a-z]+/gi, '').toLowerCase().slice(0, 40);
+  // The parts every screen is built from. A screen is a title, at most one hero window, and sections under it:
+  // a label with one quiet line beside it, then either one panel or a list of small cards.
   const banner = (cls, title, text, extra, icon) => `<div class="banner ${cls}" data-key="b-${slug(title)}">${ic(icon || noticeIcon(cls))}<div class="b-main"><h3>${title}</h3><p class="note">${text}</p>${extra || ''}</div></div>`;
   const opt = (title, text, act, label, cls, icon) => `<div class="opt ${cls || ''}" data-key="o-${slug(title)}">${icon || ''}<span class="o-main"><b>${title}</b><small>${text}</small></span>${act ? `<button class="btn small" data-act="${act}">${label}</button>` : label ? `<span class="tag dim">${label}</span>` : ''}</div>`;
-  const head = (icon, title, sub, chip) => `<header class="scr-head" data-key="head"><span class="sh-ic">${ic(icon)}</span><div class="sh-text"><h1 class="win-title">${title}</h1><div class="win-sub">${sub}</div></div>${chip || ''}</header>`;
-  const panel = (label, body, cls, key) => `<section class="panel ${cls || ''}" data-key="${key || 'p-' + slug(label)}">${label ? `<div class="ph">${label}</div>` : ''}${body}</section>`;
+  const head = (icon, title, cap, side, cls) => `<header class="scr-head${title.length > 11 ? ' long' : ''}${cls ? ' ' + cls : ''}" data-key="head"><span class="sh-ic">${ic(icon)}</span><div class="sh-text"><h1 class="win-title">${title}</h1>${cap ? `<div class="sh-cap">${cap}</div>` : ''}</div>${side ? `<div class="sh-side">${side}</div>` : ''}</header>`;
+  const sect = (title, body, side, key) => `<section class="sec" data-key="${key || 's-' + slug(title)}">${title ? `<div class="sec-head"><h2 class="sec-title">${title}</h2>${side ? `<span class="sec-side">${side}</span>` : ''}</div>` : ''}${body}</section>`;
+  const card = (body, cls) => `<div class="card ${cls || ''}">${body}</div>`;
+  const group = (items, cls) => `<div class="opts ${cls || ''}">${items.join('')}</div>`;
 
   function testBar() {
     return testing() ? `<div class="testbar"><span>Test clock <b>+${plural(state.debugOffset, 'day')}</b>. Nothing done here is kept.</span><button class="btn small" data-act="unskip">Back to today</button></div>` : '';
@@ -865,29 +883,32 @@
   function updateBar() {
     return shell && shell.updateReady ? '<div class="testbar upd"><span>A new version of the app is ready.</span><button class="btn small" data-act="app-update">Update</button></div>' : '';
   }
-  function hud() {
-    const need = E.xpForNext(state.level), max = !isFinite(need), live = E.liveStreak(state);
-    const t = E.TITLES.find(x => x.id === state.title);
-    const lvUp = changed('hud-lv', state.level);
-    return `<header class="hud" data-key="hud">
-      <div class="hud-crest">${myCrest()}</div>
-      <div class="hud-main">
-        <div class="hud-top"><span class="pname">${esc(state.name)}</span><span class="pills">
-          <span class="pill" role="img" aria-label="${state.essence} Essence">${ob('essence')}<span${roll('hud-ess', state.essence, 'num', true)}>${num(state.essence)}</span></span>
-          <span class="pill ${live.n ? 'hot' : ''}" role="img" aria-label="Streak ${live.n}">${ob('flame')}<span${roll('hud-streak', live.n)}>${live.n}</span></span>
-        </span></div>
-        <div class="ptitle"><span>${t ? esc(t.name) : 'No title'}</span>${state.hard ? '<span class="tag-hard">HARD MODE</span>' : ''}</div>
-        <div class="xprow"><span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span><div class="bar xp">${fill('xp', max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : `<span><b${lvUp ? '' : roll('hud-xp', state.xp, 'num', true)}>${num(state.xp)}</b> / ${num(need)} XP</span>`}</span></div></div>
-      </div>
-    </header>`;
+  // The XP bar with its count written on it.
+  const xpBar = (key, rollKey, lvUp) => {
+    const need = E.xpForNext(state.level), max = !isFinite(need);
+    return `<div class="bar xp">${fill(key, max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : `<span><b${lvUp || !rollKey ? '' : roll(rollKey, state.xp, 'num', true)}>${num(state.xp)}</b> / ${num(need)} XP</span>`}</span></div>`;
+  };
+  // Who is playing, the level and the XP: the strip at the foot of the quest hero. "+12 XP" lands on its bar.
+  function levelStrip() {
+    const lvUp = changed('hud-lv', state.level), t = E.TITLES.find(x => x.id === state.title);
+    return `<div class="xprow">${myCrest()}<div class="xp-col">
+        <div class="xp-top"><span class="pname">${esc(state.name)}</span>${t ? `<span class="ptitle">${esc(t.name)}</span>` : ''}${state.hard ? '<span class="tag-hard">HARD</span>' : ''}</div>
+        <div class="xp-line"><span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span>${xpBar('xp', 'hud-xp', lvUp)}</div>
+      </div></div>`;
   }
-  // The small header that follows the page down once the full one has scrolled away.
+  // The one thing on the right of a screen's title.
+  const streakPill = () => { const live = E.liveStreak(state); return `<span class="pill streak ${live.n ? 'hot' : ''}" role="img" aria-label="Streak ${live.n}">${ob('flame')}<span${roll('hud-streak', live.n)}>${live.n}</span></span>`; };
+  const essencePill = () => `<span class="pill" role="img" aria-label="${state.essence} Essence">${ob('essence')}<span${roll('hud-ess', state.essence, 'num', true)}>${num(state.essence)}</span></span>`;
+  // The small header that follows the page down once the top of the screen has scrolled away. On the quest screen it
+  // holds the level bar, on the others the name of the screen. A tap on it goes back to the top.
+  const TAB_NAME = { quest: 'Quest', hunter: 'Hunter', log: 'Log', hall: 'Hunter Hall', system: 'System' };
   function miniHud() {
     if (!mini) return;
     if (!state) { mini.innerHTML = ''; return; }
-    const need = E.xpForNext(state.level), max = !isFinite(need), live = E.liveStreak(state), lvUp = changed('mini-lv', state.level);
-    morph(mini, `<div class="mini-in" data-act="top">${myCrest('mini')}<span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span>
-      <div class="bar xp">${fill('mxp', max ? 1 : state.xp / need)}<span class="xpnum">${max ? 'MAX LEVEL' : `<span><b${lvUp ? '' : roll('mini-xp', state.xp, 'num', true)}>${num(state.xp)}</b> / ${num(need)} XP</span>`}</span></div>
+    if (tab !== 'quest') { morph(mini, `<div class="mini-in plain" data-key="mini-${tab}" data-act="top"><span class="mini-title">${TAB_NAME[tab]}</span></div>`); return; }
+    const live = E.liveStreak(state), lvUp = changed('mini-lv', state.level);
+    morph(mini, `<div class="mini-in" data-key="mini-quest" data-act="top">${myCrest('mini')}<span class="plevel"${lvUp ? ' data-fx="bump"' : ''}>LV ${state.level}</span>
+      ${xpBar('mxp', 'mini-xp', lvUp)}
       <span class="pill ${live.n ? 'hot' : ''}">${ob('flame')}${live.n}</span></div>`);
     runFx(mini);
   }
@@ -895,6 +916,8 @@
     const n = now(), m = Math.max(0, Math.round((E.nextReset(n) - n) / 60000));
     return Math.floor(m / 60) + 'h ' + String(m % 60).padStart(2, '0') + 'm';
   }
+  // A part of a screen that stays folded until it is asked for (data-act="fold"). Folded, it is inert.
+  const fold = (key, body) => `<div class="fold${openDetails[key] ? ' open' : ''}" data-key="fold-${key}"${openDetails[key] ? '' : ' inert'}><div class="fold-in">${body}</div></div>`;
 
   // One quest row is open at a time. null follows the first unfinished task, 'none' closes them all.
   let qsel = null, qselDay = null;
@@ -902,60 +925,69 @@
     if (qselDay !== state.lastDay) { qsel = null; qselDay = state.lastDay; } // the choice belongs to one day
     return qsel === 'none' ? null : E.QUEST_IDS.includes(qsel) ? qsel : (E.QUESTS.find(q => day.progress[q.id] < day.targets[q.id]) || {}).id || null;
   };
+  // The stamp a finished task gets.
   const stamp = key => `<span class="stamp"${changed(key, true) ? ' data-fx="stamp"' : ''}>${ic('clear')}Clear</span>`;
 
   function questScreen() {
     const day = E.today(state), live = E.liveStreak(state);
     const resting = day.kind === 'rest', paused = !!day.paused, logOn = E.canLog(state);
     const pen = day.penalty, penDone = E.penaltyDone(day);
+    const doneN = E.QUESTS.filter(q => day.progress[q.id] >= day.targets[q.id]).length;
     const title = resting ? 'Rest Day' : paused ? 'Quest Paused' : pen ? 'Penalty Quest' : 'Daily Quest';
-    const mood = resting ? 'rest' : paused ? 'paused' : pen && !penDone && logOn ? 'pen warnwin' : day.cleared ? 'cleared' : '';
-    let out = `<section class="keyart aura-${E.auraOf(state)} ${mood}" data-key="keyart">
-      <div class="ka-art"><i class="ka-scene"></i>${figure(state.rank >= 4)}<i class="ka-scrim"></i></div>
-      <span class="chip ${live.n ? 'hot' : ''}">${ob('flame')}Streak ${live.n}</span>
-      <div class="ka-text"><h1 class="win-title">${title}</h1><div class="win-sub">${ic('time')}<span>Next quest at 4 AM, in <span id="cd">${countdown()}</span>.</span></div></div>
-    </section>`;
+    const owed = !!pen && !penDone && !resting && !paused;
+    const mood = resting ? 'rest' : paused ? 'paused' : owed ? 'pen warnwin' : day.cleared ? 'cleared' : '';
+    let out = head(resting ? 'rest' : paused ? 'shield' : owed ? 'skull' : 'quest', title, `${dateLabel(state.lastDay)}<i class="sep"></i>resets in <span id="cd">${countdown()}</span>`, streakPill(), owed ? 'warn' : '');
 
-    if (resting) out += banner('gold', 'Rest day', 'A rest token is holding your streak. No XP today and no penalty tomorrow.', '<button class="btn small" data-act="rest-cancel">Train after all</button>', 'rest');
-    else if (paused) out += banner('', 'Injured or sick mode', 'The quest and the streak are paused. Nothing is lost while you recover.', '<button class="btn small" data-act="pause-off">I am ready to train</button>', 'shield');
-    else {
-      if (state.paused) out += banner('', 'Pause starts tomorrow', 'Today was already cleared, so it counts. From tomorrow the quest and the streak are paused.', '<button class="btn small" data-act="pause-off">Cancel the pause</button>', 'shield');
-      if (pen) out += penDone
-        ? banner('ok', 'Penalty served', 'Quest and extra task are done. The streak carries on.')
-        : banner('warn', 'Penalty Quest', 'Clear the quest and the extra task today (' + penaltyText(pen) + '), or the streak resets to 0.' + (state.hard ? ' Hard mode doubled the extra task.' : ''));
-      if (day.trial) out += day.trial.passed
-        ? banner('gold', 'Rank Trial passed', 'You hold ' + E.RANKS[day.trial.rank].id + ' rank.')
-        : banner('gold', 'Rank Trial: ' + E.RANKS[day.trial.rank].id + ' rank', 'Reach ' + quest4(day.trial.req) + ' before the reset. Everything you log today counts. Not passing costs nothing.');
-      if (day.cleared) out += banner('ok', 'Quest cleared', 'Rest, or keep going: extra work still earns XP. How did it feel?', feltButtons(day));
-    }
-
+    // The hero: the one framed window of the screen, with the hunter in it. It carries today's score as a ring with the
+    // marks of the daily track on it (no penalty from 25%, the streak grows from 75%, the chest waits at the end),
+    // one line on what the score means, and the level bar. The chest sits at the top of the ring, so the lit part
+    // runs from one side of it round to the other (ui.css: 6% of the circle is kept clear on each side).
+    let core;
     if (logOn) {
       const sc = E.score(day);
-      const hint = live.state === 'risk' ? 'Finish all four tasks and the extra task to save the streak.'
-        : live.state === 'grown' ? (day.cleared ? 'Today counts toward the streak.' : 'Past 75%: today counts toward the streak. Clear all four for the bonus and the chest.')
+      const hint = live.state === 'risk' ? 'Clear the quest and the extra task today, or the streak resets to 0.'
+        : live.state === 'grown' ? (day.cleared ? 'Cleared. Today counts toward the streak.' : 'Past 75%: today counts toward the streak. Clear all four for the bonus and the chest.')
         : live.state === 'hold' ? 'The streak holds. Reach 75% to grow it.'
         : state.graceDay === state.lastDay ? 'You awakened today, so nothing is owed if you start tomorrow. After today, a day under 25% brings a Penalty Quest.'
         : sc > 0 ? 'Under 25% means a Penalty Quest tomorrow.' : 'Nothing logged yet. A missed day means a Penalty Quest tomorrow.';
-      // The score bar is a reward track: no penalty at 25%, the streak grows at 75%, the chest waits at the end.
-      const node = (key, at, icon, text) => { const lit = sc >= at; return `<span class="tk-node${lit ? ' lit' : ''}"${changed(key, lit) && lit ? ' data-fx="node"' : ''} style="left:${at * 100}%"><b>${icon}</b><small>${text}</small></span>`; };
-      out += `<section class="panel track${day.cleared ? ' cleared' : ''}${pen && !penDone ? ' warn' : ''}" data-key="track">
-        <div class="tk-row">
-          <div class="tk-main">
-            <div class="row"><span class="ph">Quest score</span><span class="tk-pct"${roll('tk-pct', Math.round(sc * 100), 'pct', true)}>${pct(sc)}</span></div>
-            <div class="tk-bar${pen ? ' bare' : ''}">
-              <div class="bar tall seg ${day.cleared ? 'ok' : ''}">${fill('score', sc)}</div>
-              ${pen ? '' : node('n1', T.partial, ic('shield'), 'No penalty') + node('n2', T.nearClear, ob('flame'), 'Streak +1')}
-            </div>
-          </div>
-          <span class="tk-chest${day.cleared ? ' lit' : ''}"${changed('tk-chest', !!day.cleared) && day.cleared ? ' data-fx="lit"' : ''}>${ob(day.cleared ? 'chest-open' : 'chest-closed')}<small>${day.cleared ? 'Claimed' : 'Chest'}</small></span>
+      const mark = (key, at, icon, label) => { const lit = sc >= at; return `<span class="ring-mark${lit ? ' lit' : ''}"${changed(key, lit) && lit ? ' data-fx="node"' : ''} style="--at:${Math.round((.06 + at * .88) * 1000) / 1000}" role="img" aria-label="${label}"><b>${icon}</b></span>`; };
+      core = `<div class="ring${day.cleared ? ' ok' : ''}${sc > 0 ? '' : ' zero'}" style="--p:${Math.round(sc * 1000) / 10}">
+          <svg viewBox="0 0 120 120" aria-hidden="true"><circle class="ring-bg" cx="60" cy="60" r="52"/><circle class="ring-tick" cx="60" cy="60" r="43" pathLength="120"/><circle class="ring-fg" cx="60" cy="60" r="52" pathLength="100"/><circle class="ring-core" cx="60" cy="60" r="52" pathLength="100"/></svg>
+          ${pen ? '' : mark('n1', T.partial, ic('shield'), 'No penalty from ' + pct(T.partial)) + mark('n2', T.nearClear, ob('flame'), 'The streak grows from ' + pct(T.nearClear))}
+          <span class="ring-mark chest${day.cleared ? ' lit' : ''}"${changed('tk-chest', !!day.cleared) && day.cleared ? ' data-fx="lit"' : ''} style="--at:1" role="img" aria-label="${day.cleared ? 'Chest claimed' : 'A chest waits at 100%'}">${ob(day.cleared ? 'chest-open' : 'chest-closed')}</span>
+          <div class="ring-in"><b class="tk-pct"${roll('tk-pct', Math.round(sc * 100), 'pct', true)}>${pct(sc)}</b><small>Quest score</small></div>
         </div>
-        <p class="note" id="q-hint">${hint}</p>
-      </section>`;
+        <p class="note" id="q-hint">${hint}</p>`;
+    } else if (resting) {
+      core = `<div class="hero-idle">${ob('token')}</div>
+        <p class="note">A rest token is holding your streak. No XP today and no penalty tomorrow.</p>
+        <button class="btn small" data-act="rest-cancel">Train after all</button>`;
+    } else {
+      core = `<div class="hero-idle">${ic('shield')}</div>
+        <p class="note">The quest and the streak are paused, and nothing is lost while you recover. Today's quest stays at ${quest4(day.targets)}.</p>
+        <button class="btn small" data-act="pause-off">I am ready to train</button>`;
+    }
+    out += `<section class="hero hud aura-${E.auraOf(state)} ${mood}" data-key="hud">
+      <div class="ka-art"><i class="ka-scene"></i>${figure(state.rank >= 4)}<i class="ka-scrim"></i></div>
+      <div class="hero-main">${core}</div>
+      ${levelStrip()}
+    </section>`;
+
+    if (logOn) {
+      // What is special about today, one notice each.
+      if (state.paused) out += banner('', 'Pause starts tomorrow', 'Today was already cleared, so it counts. From tomorrow the quest and the streak are paused.', '<button class="btn small" data-act="pause-off">Cancel the pause</button>', 'shield');
+      if (pen) out += penDone
+        ? banner('ok', 'Penalty served', 'Quest and extra task are done. The streak carries on.')
+        : banner('warn', 'Extra task today', penaltyText(pen) + '.' + (state.hard ? ' Hard mode doubled it.' : ''));
+      if (day.trial) out += day.trial.passed
+        ? banner('gold', 'Rank Trial passed', 'You hold ' + E.RANKS[day.trial.rank].id + ' rank.')
+        : banner('gold', 'Rank Trial: ' + E.RANKS[day.trial.rank].id + ' rank', 'Reach ' + quest4(day.trial.req) + ' before the reset. Everything you log today counts. Not passing costs nothing.');
+      if (day.cleared && (!day.felt || openDetails.felt)) out += banner('ok', 'How did it feel?', 'Your answer steers how fast the quest grows.', feltButtons(day));
 
       const focusOn = state.skills.includes('splitFocus'), open = openQuest(day);
       // Every card carries its controls; a closed card folds them away (and makes them inert), so opening and
       // closing is one smooth height change instead of a jump.
-      const rows = E.QUESTS.map(q => {
+      const list = E.QUESTS.map(q => {
         const id = q.id, p = day.progress[id], t = day.targets[id], done = p >= t, isRun = id === 'run', share = Math.min(1, p / t), isOpen = id === open;
         const top = `<span class="q-med" style="--p:${Math.round(share * 1000) / 10}">${ic(id)}</span>
           <span class="q-body">
@@ -967,11 +999,11 @@
         if (day.trial && !day.trial.passed && p < day.trial.req[id]) notes.push('Trial: ' + fmt(id, day.trial.req[id]) + unit(id) + ' needed, ' + fmt(id, r2(day.trial.req[id] - p)) + unit(id) + ' to go.');
         if (pen && pen.type === 'extra' && pen.id === id) notes.push(p >= pen.need ? 'Penalty extra done.' : 'Penalty: ' + fmt(id, pen.need) + unit(id) + ' today, ' + fmt(id, r2(pen.need - p)) + unit(id) + ' to go.');
         if (isRun && !done && day.tiers.run <= 2) notes.push('Walk-run intervals count at this tier. Cover the distance.');
-        if (isRun) notes.push('Add the minutes for a run of 1 km or more and it counts toward your pace and Agility.');
+        if (isRun && state.pace.best == null) notes.push('Add the minutes for a run of 1 km or more and it counts toward your pace and Agility.');
         if (done) notes.push(p < cap ? 'Extra work up to ' + fmt(id, cap) + unit(id) + ' earns bonus XP at ' + (day.overdrive ? 'full rate (Overdrive).' : 'half rate.') : 'Bonus XP is maxed for today.');
         const btns = isRun
-          ? `<button class="btn grow" data-act="add" data-id="run" data-n="0.5">+0.5</button>
-             <button class="btn grow" data-act="add" data-id="run" data-n="1">+1</button>
+          ? `<button class="btn grow" data-act="add" data-id="run" data-n="0.5">+0.5 km</button>
+             <button class="btn grow" data-act="add" data-id="run" data-n="1">+1 km</button>
              <div class="addrow full">
                <input class="field" id="in-run" inputmode="decimal" placeholder="km" aria-label="Run distance in km" enterkeyhint="done">
                <input class="field" id="in-runmin" inputmode="decimal" placeholder="min" aria-label="Run time in minutes, optional" enterkeyhint="done">
@@ -980,7 +1012,7 @@
           : `<button class="btn grow" data-act="add" data-id="${id}" data-n="1">+1</button>
              <button class="btn grow" data-act="add" data-id="${id}" data-n="5">+5</button>
              <button class="btn grow" data-act="add" data-id="${id}" data-n="10">+10</button>
-             <button class="btn grow tapbtn" data-act="tap" data-id="${id}">Tap</button>
+             <button class="btn grow tapbtn" data-act="tap" data-id="${id}" aria-label="Tap counter"><i class="tap-ic"></i>Tap</button>
              <div class="addrow full">
                <input class="field" id="in-${id}" inputmode="numeric" placeholder="reps" aria-label="${q.name} amount" enterkeyhint="done">
                <button class="btn" data-act="add-custom" data-id="${id}">Add</button>
@@ -988,9 +1020,9 @@
         return `<div class="quest${isOpen ? ' act' : ''}${done ? ' done' : ''}" data-key="q-${id}" data-id="${id}">
           <button class="q-head" data-act="pick" data-id="${id}" aria-expanded="${isOpen}">${top}</button>
           <div class="q-more"${isOpen ? '' : ' inert'}><div class="q-in">
-            <div class="q-tags"><span class="q-stat">${q.stat}</span><span class="tier">Tier ${day.tiers[id]} &middot; XP x${E.multOf(day.tiers[id])}</span>${focusOn ? `<button class="chiplet ${day.focus === id ? 'on' : ''}" data-act="focus" data-id="${id}">Focus x2</button>` : ''}</div>
             <div class="q-btns">${btns}</div>
             ${notes.map(n => `<p class="note">${n}</p>`).join('')}
+            <div class="q-tags"><span class="q-stat">${STAT[q.stat]}</span><span class="tier">Tier ${day.tiers[id]} &middot; XP x${E.multOf(day.tiers[id])}</span>${focusOn ? `<button class="chiplet ${day.focus === id ? 'on' : ''}" data-act="focus" data-id="${id}">Focus x2</button>` : ''}</div>
           </div></div>
         </div>`;
       }).join('');
@@ -1007,46 +1039,39 @@
             </span>${pd ? stamp('s-plank') : (changed('s-plank', false), '')}
           </div>
           <div class="q-more"><div class="q-in">
-            <div class="q-tags"><span class="q-stat">Penalty</span></div>
             <div class="q-btns">
               <button class="btn grow" data-act="plank-timer">Timer</button>
               <button class="btn grow" data-act="plank-add" data-n="30">+30 s</button>
               <button class="btn grow" data-act="plank-add" data-n="60">+1 min</button>
             </div>
             ${pd ? '' : '<p class="note">Total time counts. It does not have to be one hold.</p>'}
+            <div class="q-tags"><span class="q-stat">Penalty</span></div>
           </div></div>
         </div>`;
       }
-      out += `<div class="quests" data-key="quests">${rows}${plankRow}</div>
-        <div class="row foot" data-key="foot">
-          <span class="note">Earned today: <b${roll('day-xp', Math.round(Number(day.xp) || 0), '', true)}>${Math.round(Number(day.xp) || 0)}</b><b> XP</b></span>
-          <button class="btn ghost small" data-act="undo" ${day.log && day.log.length ? '' : 'disabled'}>Undo last</button>
-        </div>
-        <details class="more" data-keep="xp" data-key="xpd" ${openDetails.xp ? 'open' : ''}><summary>How today's XP adds up</summary><div class="rewards">${rewardRows(xpRows(E.breakdown(state, day), day))}</div></details>`;
-    } else if (!resting) out += `<p class="note" data-key="held">Today's quest stays at ${quest4(day.targets)}. It will be waiting when you are back.</p>`;
+      const earned = Math.round(Number(day.xp) || 0);
+      out += sect('Tasks', `<div class="quests" data-key="quests">${list}${plankRow}</div>
+        <div class="tasks-foot" data-key="foot">
+          <div class="row foot">
+            <button class="foldbtn" data-act="fold" data-id="xp" aria-expanded="${!!openDetails.xp}">Earned today <b><span${roll('day-xp', earned, '', true)}>${earned}</span> XP</b><i class="chev"></i></button>
+            ${day.log && day.log.length ? '<button class="btn ghost small" data-act="undo">Undo last</button>' : ''}
+          </div>
+          ${fold('xp', `<div class="rewards">${rewardRows(xpRows(E.breakdown(state, day), day))}</div>`)}
+        </div>`, doneN + ' of ' + E.QUESTS.length + ' done', 'tasks');
+    }
 
-    // today's choices
+    // What else can be done today. Only what can be acted on shows here: where a rank or a token stands is on the
+    // Hunter and Log screens.
     const opts = [];
     const tri = E.trialInfo(state);
-    if (tri.next && !day.trial) {
-      const need = quest4(tri.next.trial), ri = E.RANKS.indexOf(tri.next), next = crest(ri, ri, 'mini' + (tri.canStart ? '' : ' sealed'));
-      if (tri.canStart) opts.push(opt('Rank Trial: ' + tri.next.id + ' rank', need + ' in one day. What you logged today counts.', 'trial', 'Start', 'gold', next));
-      else if (tri.levelOk && tri.wait) opts.push(opt('Rank Trial: ' + tri.next.id + ' rank', 'Not passed last time. Open again in ' + plural(tri.wait, 'day') + '.', null, 'Wait', '', next));
-      else if (tri.levelOk) opts.push(opt('Rank Trial: ' + tri.next.id + ' rank', 'Open on your next training day.', null, 'Ready', '', next));
-      else opts.push(opt('Next rank: ' + tri.next.id, 'Level ' + tri.next.level + ' and a one-day Rank Trial: ' + need + '.', null, 'Lv ' + state.level + ' / ' + tri.next.level, '', next));
-    }
+    if (tri.canStart) { const ri = E.RANKS.indexOf(tri.next); opts.push(opt('Rank Trial: ' + tri.next.id + ' rank', quest4(tri.next.trial) + ' in one day. What you logged today counts.', 'trial', 'Start', 'gold', crest(ri, ri, 'mini'))); }
     const rest = E.restInfo(state);
-    if (!rest.resting) {
-      const full = rest.tokens >= rest.cap;
-      const text = rest.canUse ? 'Freeze the streak today: no XP and no penalty.'
-        : rest.tokens ? rest.why
-        : 'Earned by ' + rest.every + ' full clears in a row. So far: ' + rest.run + '.';
-      opts.push(opt('Rest token ' + rest.tokens + ' / ' + rest.cap, text + (full && !rest.canUse ? ' The pouch is full.' : ''), rest.canUse ? 'rest' : null, rest.canUse ? 'Rest today' : rest.tokens ? 'Held' : rest.run + ' / ' + rest.every, '', ob('token', rest.tokens ? '' : 'faded')));
-    }
+    if (!rest.resting && rest.tokens) opts.push(opt('Rest token', rest.canUse ? 'Freeze the streak today: no XP and no penalty.' : rest.why, rest.canUse ? 'rest' : null, rest.canUse ? 'Rest today' : 'Held', '', ob('token')));
     const od = E.overdriveInfo(state);
-    if (od.equipped) opts.push(opt('Overdrive', od.active ? 'Active today: extra work pays at full rate.' : od.wait ? 'Ready again in ' + plural(od.wait, 'day') + '.' : 'Once a week, extra work up to 120% pays at full rate.', od.canUse ? 'overdrive' : null, od.active ? 'Active' : od.canUse ? 'Activate' : 'Wait', od.active ? 'on' : '', ob('rune')));
+    if (od.equipped && (od.active || od.canUse)) opts.push(opt('Overdrive', od.active ? 'Active today: extra work pays at full rate.' : 'Once a week, extra work up to 120% pays at full rate.', od.canUse ? 'overdrive' : null, od.active ? 'Active' : 'Activate', od.active ? 'on' : '', ob('rune')));
     if (E.retestDue(state)) opts.push(opt('Awakening Test', 'Four weeks since your last test. Re-test to place your quest again.', 'retest', 'Re-test', '', ic('trial', 'o-ic')));
-    if (opts.length) out += panel('Today', `<div class="opts">${opts.join('')}</div>`, '', 'today');
+    if (logOn && day.cleared && day.felt && !openDetails.felt) opts.push(`<div class="opt" data-key="o-felt">${ic('clear', 'o-ic')}<span class="o-main"><b>It felt: ${FELT[day.felt].toLowerCase()}</b><small>Rest, or keep going: extra work still earns XP.</small></span><button class="btn small" data-act="fold" data-id="felt">Change</button></div>`);
+    if (opts.length) out += sect('Also today', group(opts), '', 'today');
     return out;
   }
 
@@ -1065,74 +1090,75 @@
     return 'Clear ' + T.rampClears + ' of the last ' + T.rampWindow + ' days and each task grows by about 10%, at most once a week, stopping at each tier. This week: ' + plural(clears, 'clear') + (left > 0 ? ', next check in ' + plural(left, 'day') + '.' : ', checked at the next reset.');
   }
 
+  // What on the Hunter screen is waiting for a decision, by sub-view.
+  function hunterDots() {
+    const freeSkill = E.skillSlots(state) > state.skills.length && E.SKILLS.some(k => !k.inactive && state.level >= k.level && !state.skills.includes(k.id));
+    return { card: E.trialInfo(state).canStart, skills: freeSkill };
+  }
+
   function cardView() {
-    const st = E.stats(state), rank = E.RANKS[state.rank], aura = E.auraOf(state), day = E.today(state), live = E.liveStreak(state);
+    const st = E.stats(state), rank = E.RANKS[state.rank], aura = E.auraOf(state);
     const t = E.TITLES.find(x => x.id === state.title);
     const frame = E.ITEMS.some(i => i.kind === 'frame' && i.id === state.frame) ? state.frame : '';
-    const card = `<div class="pcard aura-${aura} ${frame}">
+    // The licence is the hero window of this screen: who the hunter is, and the level.
+    const licence = `<div class="pcard aura-${aura} ${frame}" data-key="pcard">
       <div class="pc-art">${figure(state.rank >= 4)}<i class="pc-sheen"></i></div>
-      <div class="pc-top"><span class="label">Hunter licence</span></div>
+      <span class="label">Hunter licence</span>
       <div class="pc-main">
         ${myCrest('big')}
         <div class="pc-id">
           <div class="pc-name">${esc(state.name)}</div>
           <div class="pc-title">${t ? esc(t.name) : 'No title'}</div>
-          <div class="pc-rank">${rank.id} rank &middot; Level ${state.level}</div>
-          <div class="pc-aura">${E.AURAS[aura]} aura</div>
+          <div class="pc-rank">${rank.id} rank<i class="sep"></i>${E.AURAS[aura]} aura</div>
           ${state.hard ? '<span class="tag-hard">HARD MODE</span>' : ''}
         </div>
       </div>
-      <div class="pc-low">
-        <div class="kv">
-          <div class="kvc"><span class="label">STR</span>${ic('str')}<b>${st.STR}</b></div>
-          <div class="kvc"><span class="label">END</span>${ic('end')}<b>${st.END}</b></div>
-          <div class="kvc"><span class="label">AGI</span>${ic('agi')}<b>${st.AGI}</b></div>
-        </div>
-        <div class="pc-foot"><span>Streak <b>${live.n}</b></span><span>Best <b>${Math.max(state.best, live.n)}</b></span><span>Clears <b>${state.clears + (day.cleared ? 1 : 0)}</b></span></div>
-      </div>
+      <div class="pc-low"><div class="xp-line"><span class="plevel">LV ${state.level}</span>${xpBar('pc-xp')}</div></div>
     </div>`;
 
-    const statRow = (k, v, p, text) => `<div class="statx"><div class="stat">${ic(k.toLowerCase())}<span>${k}</span><div class="bar">${fill('st-' + k, p)}</div><b>${v}</b></div><small class="note">${text}</small></div>`;
+    const statRow = (k, v, p, text) => `<div class="statx"><div class="stat">${ic(k.toLowerCase())}<span>${STAT[k]}</span><b>${v}</b></div><div class="bar">${fill('st-' + k, p)}</div><small class="note">${text}</small></div>`;
     const strP = (T.strPer - st.strLeft) / T.strPer, sitP = (T.endSitPer - st.sitLeft) / T.endSitPer, runP = (T.endRunPer - st.runLeft) / T.endRunPer, agiP = (T.agiRuns - st.paceRunsLeft) / T.agiRuns;
     const agiText = state.pace.best != null
       ? 'Best pace ' + mmss(state.pace.best) + ' per km. ' + plural(st.paceRunsLeft, 'more timed run') + ' near it, or ' + T.agiPaceStep + ' seconds off it, for the next point.'
-      : 'Log a run of 1 km or more with its time to start tracking pace. Every ' + T.agiRuns + ' timed runs near your best pace add a point.';
-    const stats = panel('Stats grow only from training',
+      : 'Log a run of 1 km or more with its time to start tracking pace.';
+    const stats = sect('Stats', card(
       statRow('STR', st.STR, strP, st.strLeft + ' more push-ups or squats to the next point.')
       + statRow('END', st.END, Math.max(sitP, runP), st.sitLeft + ' sit-ups or ' + fmt('run', st.runLeft) + ' km to the next point.')
-      + statRow('AGI', st.AGI, agiP, agiText));
+      + statRow('AGI', st.AGI, agiP, agiText), 'list'), 'Grow only from training');
 
     const tri = E.trialInfo(state);
     const ladder = E.RANKS.map((r, i) => `<div class="rung ${i <= state.rank ? 'got' : ''} ${i === state.rank ? 'cur' : ''}">${crest(i, i, i <= state.rank ? '' : 'sealed')}<small>Lv ${r.level}</small></div>`).join('');
-    const next = !tri.next ? 'You hold the highest rank. Level ' + E.MAX_LEVEL + ' is the cap.'
-      : 'Next: <b>' + tri.next.id + ' rank</b>. Level ' + tri.next.level + (tri.levelOk ? ' reached' : ', you are ' + state.level) + ', then a one-day Rank Trial: <b>' + quest4(tri.next.trial) + '</b>. It unlocks: ' + tri.next.unlocks.join('; ') + '.';
-    const ranks = panel('Ranks', `<div class="ladder">${ladder}</div><p class="note">${next}</p>
-      ${tri.canStart ? '<button class="btn gold" data-act="trial">Start the ' + tri.next.id + '-rank trial</button>' : ''}`);
+    let climb;
+    if (!tri.next) climb = `<p class="note">You hold the highest rank. Level ${E.MAX_LEVEL} is the cap.</p>`;
+    else {
+      const rows = [['Level ' + tri.next.level, tri.levelOk ? 'Reached' : 'You are level ' + state.level], ['Rank Trial, in one day', quest4(tri.next.trial)], ['Unlocks', tri.next.unlocks.join(', ')]];
+      const when = tri.active ? 'The trial is running today.' : tri.wait ? 'The trial opens again in ' + plural(tri.wait, 'day') + '.' : tri.levelOk && !tri.canStart ? 'The trial can be started on a day you train.' : '';
+      climb = `<div class="rewards">${rewardRows(rows)}</div>${when ? `<p class="note">${when}</p>` : ''}
+        ${tri.canStart ? '<button class="btn gold" data-act="trial">Start the ' + tri.next.id + '-rank trial</button>' : ''}`;
+    }
+    const ranks = sect('Rank', card(`<div class="ladder">${ladder}</div>${climb}`), tri.next ? 'Next: ' + tri.next.id + ' rank' : 'Highest rank');
 
-    const auraPick = panel('Aura', state.rank >= 1
-      ? `<div class="swatches">
-          <button class="swatch auto ${state.aura == null ? 'on' : ''}" data-act="aura" data-id="auto" aria-label="Follow my rank">Auto</button>
-          ${E.AURAS.slice(0, state.rank + 1).map((n, i) => `<button class="swatch aura-${i} ${state.aura === i ? 'on' : ''}" data-act="aura" data-id="${i}" aria-label="${n} aura" title="${n}"></button>`).join('')}
-        </div><p class="note">One colour for every rank you have held. From A rank the aura moves.</p>`
-      : `<p class="note">Aura colours unlock at D rank. Yours is ${E.AURAS[0]} for now.</p>`);
-
-    const path = E.QUESTS.map(q => `<div class="stat">${ic(q.id)}<span>${q.name}</span><div class="bar">${fill('rd-' + q.id, state.targets[q.id] / q.max)}</div><b>${fmt(q.id, state.targets[q.id])}<small>/${q.max}</small></b></div>`).join('');
-    const road = panel('Road to the full routine', `<div class="road">${path}</div><p class="note">${growth()}</p>`);
-    return card + stats + ranks + auraPick + road;
+    const auraPick = state.rank >= 1 ? sect('Aura', `<div class="swatches">
+        <button class="swatch auto ${state.aura == null ? 'on' : ''}" data-act="aura" data-id="auto" aria-label="Follow my rank">Auto</button>
+        ${E.AURAS.slice(0, state.rank + 1).map((n, i) => `<button class="swatch aura-${i} ${state.aura === i ? 'on' : ''}" data-act="aura" data-id="${i}" aria-label="${n} aura" title="${n}"></button>`).join('')}
+      </div>`, 'One colour for every rank you have held') : '';
+    return licence + stats + ranks + auraPick;
   }
 
   function titlesView() {
-    const items = E.TITLES.map(t => {
+    const item = t => {
       const has = state.titles.includes(t.id), on = state.title === t.id;
-      return `<button class="title-item ${has ? '' : 'locked'} ${on ? 'on' : ''}" data-act="title" data-id="${t.id}" ${has ? '' : 'disabled'}>
-        ${ic(has ? 'star' : 'lock', 'o-ic')}<span class="o-main"><b>${has ? esc(t.name) : '? ? ?'}${t.hard ? ' <i class="tag-hard">HARD</i>' : ''}</b><small>${esc(t.desc)}</small></span>
-        <span class="tag ${has ? '' : 'dim'}">${on ? 'EQUIPPED' : has ? 'Equip' : 'Locked'}</span></button>`;
-    }).join('');
-    return panel('Titles ' + state.titles.length + ' / ' + E.TITLES.length, `<div class="titles">${items}</div>`);
+      return `<button class="title-item ${has ? '' : 'locked'} ${on ? 'on' : ''}" data-key="t-${t.id}" data-act="title" data-id="${t.id}" ${has ? '' : 'disabled'}>
+        ${ic(has ? 'star' : 'lock', 'o-ic')}<span class="o-main"><b>${has ? esc(t.name) : esc(t.desc)}${t.hard ? ' <i class="tag-hard">HARD</i>' : ''}</b>${has ? `<small>${esc(t.desc)}</small>` : ''}</span>
+        ${on ? '<span class="tag">Equipped</span>' : has ? '<span class="tag go">Equip</span>' : ''}</button>`;
+    };
+    const mine = E.TITLES.filter(t => state.titles.includes(t.id)), rest = E.TITLES.filter(t => !state.titles.includes(t.id));
+    return sect('Your titles', group(mine.map(item)), mine.length + ' of ' + E.TITLES.length, 's-mine')
+      + (rest.length ? sect('Still to earn', group(rest.map(item)), '', 's-locked') : '');
   }
 
   function skillsView() {
-    const slots = E.skillSlots(state), used = state.skills.length;
+    const slots = E.skillSlots(state), used = state.skills.length, od = E.overdriveInfo(state);
     const items = E.SKILLS.map(k => {
       const on = state.skills.includes(k.id), lvOk = state.level >= k.level;
       let right;
@@ -1141,35 +1167,36 @@
       else if (!lvOk) right = `<span class="tag dim">Lv ${k.level}</span>`;
       else if (used >= slots) right = `<span class="tag dim">${slots ? 'Slots full' : 'D rank'}</span>`;
       else right = `<button class="btn small" data-act="skill-on" data-id="${k.id}">Equip</button>`;
-      return `<div class="opt ${on ? 'on' : ''} ${!lvOk || k.inactive ? 'locked' : ''}">${ob('rune')}<span class="o-main"><b>${k.name}<i class="lv">Lv ${k.level}</i></b><small>${k.desc}${k.inactive ? ' Needs bonus tasks, which are not designed yet.' : ''}</small></span>${right}</div>`;
-    }).join('');
+      const more = k.inactive ? ' Needs bonus tasks, which are not designed yet.' : on && k.id === 'overdrive' && od.wait ? ' Ready again in ' + plural(od.wait, 'day') + '.' : '';
+      return `<div class="opt ${on ? 'on' : ''} ${!lvOk || k.inactive ? 'locked' : ''}" data-key="sk-${k.id}">${ob('rune')}<span class="o-main"><b>${k.name}</b><small>${k.desc}${more}</small></span>${right}</div>`;
+    });
     const pips = Array.from({ length: 3 }, (x, i) => `<i class="pip ${i < used ? 'full' : i < slots ? 'free' : ''}"></i>`).join('');
-    return panel('Skill slots ' + used + ' / ' + slots, `<div class="pips">${pips}</div><p class="note">Slots open with rank: one at D, two at C, three at A. Skills unlock by level and can be swapped at any time.</p><div class="opts">${items}</div>`);
+    return sect('Skill slots', card(`<div class="pips">${pips}</div><p class="note">Slots open with rank: one at D, two at C, three at A. Skills can be swapped at any time.</p>`, 'slots'), used + ' of ' + slots + ' in use', 's-slots')
+      + sect('Skills', group(items), 'Unlock by level');
   }
 
   function shopView() {
     const item = it => {
       const owned = state.items.includes(it.id), on = state[it.kind] === it.id, rankOk = state.rank >= it.rank, key = 'buy:' + it.id;
       let right;
-      if (on) right = '<span class="tag">EQUIPPED</span>';
+      if (on) right = '<span class="tag">Equipped</span>';
       else if (owned) right = `<button class="btn small" data-act="equip" data-kind="${it.kind}" data-id="${it.id}">Equip</button>`;
       else if (!rankOk) right = `<span class="tag dim">${E.RANKS[it.rank].id} rank</span>`;
       else right = `<button class="btn small ${armed === key ? 'on' : ''}" data-act="buy" data-id="${it.id}" ${state.essence >= it.cost ? '' : 'disabled'}>${armed === key ? 'Confirm' : 'Buy'}</button>`;
-      return `<div class="opt ${on ? 'on' : ''}"><span class="sw ${it.id}"></span><span class="o-main"><b>${it.name}</b><small>${owned ? 'Owned' : ob('essence') + it.cost + ' Essence'}</small></span>${right}</div>`;
+      return `<div class="opt ${on ? 'on' : ''}" data-key="it-${it.id}"><span class="sw ${it.id}"></span><span class="o-main"><b>${it.name}</b><small>${owned ? 'Owned' : ob('essence') + num(it.cost)}</small></span>${right}</div>`;
     };
-    const base = (kind, name) => `<div class="opt ${state[kind] ? '' : 'on'}"><span class="sw ${kind}-default"></span><span class="o-main"><b>${name}</b><small>Standard issue</small></span>${state[kind] ? `<button class="btn small" data-act="equip" data-kind="${kind}" data-id="">Equip</button>` : '<span class="tag">EQUIPPED</span>'}</div>`;
-    const themes = E.ITEMS.filter(i => i.kind === 'theme').map(item).join('');
-    const frames = E.ITEMS.filter(i => i.kind === 'frame').map(item).join('');
-    return panel('', `<div class="wallet">${ob('essence')}<div><b>${num(state.essence)}</b><span class="label">Essence</span></div></div>
-        <p class="note">Every cleared quest drops a chest with Essence, and now and then a cosmetic. Streak milestones pay more. Nothing here makes you stronger.</p>`)
-      + panel('Quest window themes', `<div class="opts">${base('theme', 'System Blue')}${themes}</div>`)
-      + panel('Card frames, from B rank', `<div class="opts">${base('frame', 'Plain')}${frames}</div>`);
+    const base = (kind, name) => `<div class="opt ${state[kind] ? '' : 'on'}" data-key="it-${kind}"><span class="sw ${kind}-default"></span><span class="o-main"><b>${name}</b><small>Standard issue</small></span>${state[kind] ? `<button class="btn small" data-act="equip" data-kind="${kind}" data-id="">Equip</button>` : '<span class="tag">Equipped</span>'}</div>`;
+    return sect('Themes', group([base('theme', 'System Blue')].concat(E.ITEMS.filter(i => i.kind === 'theme').map(item))), 'Recolour the whole app')
+      + sect('Card frames', group([base('frame', 'Plain')].concat(E.ITEMS.filter(i => i.kind === 'frame').map(item))), 'From B rank')
+      + '<p class="note fine">Every cleared quest drops a chest with Essence, and now and then a cosmetic. Streak milestones pay more. Nothing here makes you stronger.</p>';
   }
 
   function hunterScreen() {
     const subs = [['card', 'Card'], ['titles', 'Titles'], ['skills', 'Skills'], ['shop', 'Shop']];
-    return head('hunter', 'Hunter', E.RANKS[state.rank].id + '-rank hunter, level ' + state.level + '.')
-      + `<div class="subtabs" role="tablist" data-key="subtabs">${subs.map(([k, n]) => `<button class="subtab" role="tab" aria-selected="${sub === k}" data-act="sub" data-id="${k}">${n}</button>`).join('')}</div>`
+    const dots = hunterDots(), si = Math.max(0, subs.findIndex(s => s[0] === sub));
+    // One lit frame glides to the part that was picked (--si is its index).
+    return head('hunter', 'Hunter', E.RANKS[state.rank].id + ' rank<i class="sep"></i>Level ' + state.level, essencePill())
+      + `<div class="subtabs" role="tablist" data-key="subtabs" style="--si:${si};--sn:${subs.length}"><i class="seg-ind"></i>${subs.map(([k, n]) => `<button class="subtab${dots[k] && sub !== k ? ' dot' : ''}" role="tab" aria-selected="${sub === k}" data-act="sub" data-id="${k}">${n}<i class="dot"></i></button>`).join('')}</div>`
       + `<div class="subview" data-key="sub-${sub}"${changed('sub', sub) ? ' data-fx="enter"' : ''}>${sub === 'titles' ? titlesView() : sub === 'skills' ? skillsView() : sub === 'shop' ? shopView() : cardView()}</div>`;
   }
 
@@ -1181,71 +1208,94 @@
     const r = E.resultOf(d);
     return r === 'missed' || r === 'weak' ? '' : r;
   }
+  const dayScore = d => !d ? 0 : d.score != null ? d.score : d.kind === 'quest' ? E.score(d) : 0;
+  // The day that is picked in the calendar: its result, the four tasks as small rings, and what else happened.
   function dayDetail(k) {
-    const d = state.days[k], isToday = k === state.lastDay, res = dayResult(k);
-    const sc = d.score != null ? d.score : d.kind === 'quest' ? E.score(d) : 0;
-    const rows = [['Result', (isToday && !d.cleared && d.kind === 'quest' && !d.paused ? 'In progress' : RESULT[res] || 'In progress') + (d.kind === 'quest' && !(d.paused && !d.cleared) ? ', ' + pct(sc) : '')]];
-    if (d.kind === 'quest') for (const q of E.QUESTS) rows.push([q.name, fmt(q.id, d.progress[q.id]) + ' / ' + fmt(q.id, d.targets[q.id]) + unit(q.id)]);
+    const d = state.days[k], isToday = k === state.lastDay, res = dayResult(k), quest = d.kind === 'quest';
+    const open = isToday && !d.cleared && quest && !d.paused;
+    const tasks = quest ? `<div class="day-tasks">${E.QUESTS.map(q => {
+      const p = d.progress[q.id], t = d.targets[q.id];
+      return `<div class="dt${p >= t ? ' done' : ''}"><span class="q-med" style="--p:${Math.round(Math.min(1, p / t) * 100)}">${ic(q.id)}</span><b>${fmt(q.id, p)}</b><small>of ${fmt(q.id, t)}${unit(q.id)}</small></div>`;
+    }).join('')}</div>` : '';
+    const rows = [];
     if (k === state.graceDay && !isToday && (res === 'missed' || res === 'weak')) rows.push(['Day of the Awakening Test', 'No penalty']);
     if (d.penalty) rows.push(['Penalty extra', penaltyText(d.penalty) + (E.penaltyDone(d) ? ', done' : isToday ? '' : ', not done')]);
     if (d.trial) rows.push(['Rank Trial', E.RANKS[d.trial.rank].id + (d.trial.passed ? ', passed' : isToday ? ', running' : ', not passed')]);
     if (d.felt) rows.push(['Felt', FELT[d.felt]]);
     rows.push(['XP', Math.round(Number(d.xp) || 0), 'sum']);
-    return panel(dateLabel(k) + (isToday ? ', today' : ''), `<div class="rewards">${rewardRows(rows)}</div>`);
+    return `<div class="card day" data-key="day"${changed('log-day', k) ? ' data-fx="enter"' : ''}>
+      <div class="day-top"><b class="day-name">${dateLabel(k)}${isToday ? '<span class="tag">Today</span>' : ''}</b><span class="res ${open || !res ? '' : 'r-' + res}">${open ? 'In progress' : RESULT[res] || 'In progress'}${quest && !(d.paused && !d.cleared) ? '<i class="sep"></i>' + pct(dayScore(d)) : ''}</span></div>
+      ${tasks}
+      <div class="rewards">${rewardRows(rows)}</div>
+    </div>`;
   }
   function logScreen() {
-    const tk = state.lastDay, d = E.parseKey(tk);
+    const tk = state.lastDay, d = E.parseKey(tk), today = E.today(state), live = E.liveStreak(state), best = Math.max(state.best, live.n);
     const start = E.addDays(tk, -((d.getDay() + 6) % 7) - 28);
     const sel = state.days[logSel] ? logSel : tk;
+    // Each day is a ring that closes as far as the day got. A cleared day is filled in.
     let cells = ['M', 'T', 'W', 'T', 'F', 'S', 'S'].map(x => `<div class="dow">${x}</div>`).join('');
     for (let i = 0; i < 35; i++) {
-      const k = E.addDays(start, i), has = !!state.days[k], future = k > tk, res = future ? '' : dayResult(k);
-      cells += `<button class="cell ${future ? 'future' : res ? 'r-' + res : ''} ${k === tk ? 'today' : ''} ${k === sel ? 'sel' : ''}" data-act="day" data-id="${k}" ${has && !future ? '' : 'disabled'} aria-label="${dateLabel(k)}${res ? ', ' + RESULT[res] : ''}">${Number(k.slice(8))}</button>`;
+      const k = E.addDays(start, i), day = state.days[k], future = k > tk, res = future ? '' : dayResult(k);
+      const p = future || !day ? 0 : Math.round(Math.min(1, dayScore(day)) * 100);
+      cells += `<button class="cell ${future ? 'future' : res ? 'r-' + res : ''} ${k === tk ? 'today' : ''} ${k === sel ? 'sel' : ''}" style="--p:${p}" data-act="day" data-id="${k}" ${day && !future ? '' : 'disabled'} aria-label="${dateLabel(k)}${res ? ', ' + RESULT[res] : ''}"><span>${Number(k.slice(8))}</span></button>`;
     }
-    const lg = (cls, name) => `<span><i class="cell ${cls}"></i>${name}</span>`;
-    const tot = state.totals;
+    const lg = (cls, name, p) => `<span><i class="cell ${cls}" style="--p:${p}"></i>${name}</span>`;
+    const clears = state.clears + (today.cleared ? 1 : 0);
+    const calendar = `<div class="card cal-card" data-key="cal"><div class="cal">${cells}</div>
+      <div class="legend">${lg('r-clear', 'Clear', 100)}${lg('r-partial', 'Partly done', 60)}${lg('r-missed', 'Missed', 0)}${lg('r-rest', 'Rest', 0)}</div></div>`;
+
+    const next = E.MILESTONES.find(m => !state.milestones.includes(m.days));
     const stones = E.MILESTONES.map(m => { const got = state.milestones.includes(m.days); return `<div class="stone ${got ? 'got' : ''}">${ob('flame')}<b>${m.days}</b><small>days</small></div>`; }).join('');
-    const cell = (icon, label, value, cls) => `<div class="kvc"><span class="label">${label}</span>${icon}<b${cls ? ' class="' + cls + '"' : ''}>${value}</b></div>`;
-    return head('log', 'Log', 'The last five weeks. Tap a day.', `<span class="chip">${plural(state.clears + (E.today(state).cleared ? 1 : 0), 'clear')}</span>`)
-      + panel('', `<div class="cal">${cells}</div>
-        <div class="legend">${lg('r-clear', 'Clear')}${lg('r-near', 'Near clear')}${lg('r-partial', 'Partial')}${lg('r-weak', 'Weak')}${lg('r-missed', 'Missed')}${lg('r-rest', 'Rest')}${lg('r-paused', 'Paused')}</div>`)
-      + dayDetail(sel)
-      + panel('Streak milestones', `<div class="stones">${stones}</div><p class="note">Each one pays Essence and a title, once.</p>`)
-      + panel('Lifetime', `<div class="kv">
-          ${cell(ic('pushups'), 'Push-ups', num(tot.pushups))}
-          ${cell(ic('situps'), 'Sit-ups', num(tot.situps))}
-          ${cell(ic('squats'), 'Squats', num(tot.squats))}
-          ${cell(ic('run'), 'Run km', fmt('run', tot.run))}
-          ${cell(ic('star'), 'Total XP', num(state.totalXp))}
-          ${cell(ob('flame'), 'Best streak', Math.max(state.best, E.liveStreak(state).n))}
-          ${cell(ic('clear'), 'Full routine', state.fullClears)}
-          ${cell(ic('skull'), 'Penalties', state.penaltyClears)}
-          ${cell('', 'Since', dateLabel(state.created), 'sm')}
-        </div>`);
+    const rest = E.restInfo(state);
+    const streak = sect('Streak', card(`<div class="streak-now ${live.n ? 'hot' : ''}">${ob('flame')}<div class="sn-main"><b${roll('log-streak', live.n)}>${live.n}</b><small>${live.n === 1 ? 'day' : 'days'} in a row</small></div><div class="sn-side"><small>Best</small><b>${best}</b></div></div>
+        <div class="stones">${stones}</div>
+        <p class="note">${next ? 'Next milestone at ' + plural(next.days, 'day') + ': ' + next.essence + ' Essence and a title.' : 'Every milestone is reached.'}</p>`)
+      + group([`<div class="opt" data-key="s-token">${ob('token', rest.tokens ? '' : 'faded')}<span class="o-main"><b>Rest tokens</b><small>${rest.tokens >= rest.cap ? 'You hold as many as you can carry. One freezes the streak for a day.' : 'One freezes the streak for a day. ' + rest.run + ' of ' + rest.every + ' clears in a row toward the next.'}</small></span><span class="tag ${rest.tokens ? '' : 'dim'}">${rest.tokens} / ${rest.cap}</span></div>`]),
+      live.state === 'risk' ? 'At risk today' : live.state === 'frozen' ? 'Frozen today' : '');
+
+    const path = E.QUESTS.map(q => `<div class="stat">${ic(q.id)}<span>${q.name}</span><b>${fmt(q.id, state.targets[q.id])}<small> / ${q.max}${unit(q.id)}</small></b></div><div class="bar">${fill('rd-' + q.id, state.targets[q.id] / q.max)}</div>`).join('');
+    const road = sect('Road to the full routine', card(`<div class="road">${path}</div><p class="note">${growth()}</p>`));
+
+    const tot = state.totals;
+    const cell = (label, value) => `<div class="kvc"><b>${value}</b><span>${label}</span></div>`;
+    const life = sect('Lifetime', card(`<div class="kv">
+        ${cell('Push-ups', num(tot.pushups))}${cell('Sit-ups', num(tot.situps))}${cell('Squats', num(tot.squats))}
+        ${cell('Run, km', fmt('run', tot.run))}${cell('Total XP', num(state.totalXp))}${cell('Clears', num(clears))}
+        ${cell('Full routine', num(state.fullClears))}${cell('Penalties served', num(state.penaltyClears))}${cell('Best streak', best)}
+      </div>`), 'Since ' + dateLabel(state.created));
+
+    return head('log', 'Log', plural(clears, 'clear') + '<i class="sep"></i>best streak ' + best)
+      + sect('Last five weeks', calendar + dayDetail(sel), 'Tap a day', 's-cal')
+      + streak + road + life;
   }
 
   function hallScreen() {
-    const h = E.hallInfo(state), rank = E.RANKS[state.rank];
-    const req = (ok, title, text, p, key) => `<div class="opt ${ok ? 'on' : ''}"><span class="o-main"><b>${title}</b><small>${text}</small><div class="bar ${ok ? 'ok' : ''}">${fill(key, p)}</div></span><span class="tag ${ok ? '' : 'dim'}">${ok ? 'DONE' : 'OPEN'}</span></div>`;
-    let body;
+    const h = E.hallInfo(state), rank = E.RANKS[state.rank], open = h.state === 'open';
+    const req = (ok, key, title, text, p, right) => `<div class="opt ${ok ? 'ok' : ''}" data-key="h-${key}">${ic(ok ? 'clear' : 'lock', 'o-ic')}<span class="o-main"><b>${title}</b><small>${text}</small><div class="bar">${fill('h-' + key, p)}</div></span><span class="tag ${ok ? '' : 'dim'}">${right}</span></div>`;
+    let lead, body;
     if (h.state === 'sealed') {
-      body = banner('', 'Sealed', 'The Hall opens to hunters who hold ' + h.rankNeed + ' rank and have kept a ' + h.streakNeed + '-day streak. Both. The gate is checked at the daily reset.', '', 'lock')
-        + `<div class="opts">${req(h.rankOk, h.rankNeed + ' rank', 'You hold ' + rank.id + ' rank.', state.rank / T.hallRank, 'h-rank')}${req(h.streakOk, h.streakNeed + '-day streak', 'Your best streak is ' + plural(h.best, 'day') + '.', h.best / h.streakNeed, 'h-streak')}</div>`;
-    } else if (h.state === 'open') {
+      lead = 'The Hall opens to hunters who hold ' + h.rankNeed + ' rank and have kept a ' + h.streakNeed + '-day streak. Both.';
+      body = sect('To enter', group([
+        req(h.rankOk, 'rank', h.rankNeed + ' rank', 'You hold ' + rank.id + ' rank.', state.rank / T.hallRank, h.rankOk ? 'Done' : rank.id + ' / ' + h.rankNeed),
+        req(h.streakOk, 'streak', h.streakNeed + '-day streak', 'Your best streak is ' + plural(h.best, 'day') + '.', h.best / h.streakNeed, h.streakOk ? 'Done' : h.best + ' / ' + h.streakNeed),
+      ]), 'Checked at the daily reset');
+    } else if (open) {
       const t = E.TITLES.find(x => x.id === state.title);
-      body = banner('ok', 'The Hall is open', 'You earned your place. For now you stand here alone: other hunters arrive with the iOS app.', '', 'hall')
-        + `<div class="opts"><div class="opt on">${myCrest('mini')}<span class="o-main"><b>${esc(state.name)}</b><small>${t ? esc(t.name) + ', ' : ''}${rank.id} rank, level ${state.level}</small></span><span class="tag">YOU</span></div></div>`
+      lead = 'You earned your place. For now you stand here alone: other hunters arrive with the iOS app.';
+      body = sect('In the Hall', group([`<div class="opt on" data-key="h-you">${myCrest('mini')}<span class="o-main"><b>${esc(state.name)}</b><small>${t ? esc(t.name) + ', ' : ''}${rank.id} rank, level ${state.level}</small></span><span class="tag">You</span></div>`]), '1 hunter')
         + `<p class="note">Stay active. The Hall locks after ${h.idleMax} days without a cleared quest. Days since your last clear: <b>${h.idle}</b>.</p>`;
     } else {
-      body = banner('warn', 'Locked', h.idleMax + ' days passed without a cleared quest. Clear ' + h.clearsNeed + ' quests and the Hall opens again.', '', 'lock')
-        + `<div class="opts">${req(false, 'Clears since the lock', h.clears + ' of ' + h.clearsNeed + '.', h.clears / h.clearsNeed, 'h-clears')}</div>`;
+      lead = h.idleMax + ' days passed without a cleared quest. Clear ' + h.clearsNeed + ' quests and the Hall opens again.';
+      body = sect('To reopen', group([req(false, 'clears', 'Clear ' + plural(h.clearsNeed, 'quest'), h.clears + ' cleared since the lock.', h.clears / h.clearsNeed, h.clears + ' / ' + h.clearsNeed)]));
     }
-    return `<section class="keyart hall ${h.state}">
-        <div class="ka-art"><i class="ka-scene"></i><i class="ka-scrim"></i>${h.state === 'open' ? '' : ic('lock', 'ka-lock')}</div>
-        <span class="chip ${h.state === 'open' ? 'hot' : ''}">${h.state === 'open' ? 'Open' : h.state === 'locked' ? 'Locked' : 'Sealed'}</span>
-        <div class="ka-text"><h1 class="win-title">Hunter Hall</h1><div class="win-sub"><span>Where ranked hunters meet.</span></div></div>
-      </section>`
-      + panel('', body + '<p class="note">In this version the Hall is only its gate. Rankings, friends and guilds need accounts and a server, so they come with the iOS app.</p>');
+    return head('hall', 'Hunter Hall', 'Where ranked hunters meet')
+      + `<section class="hero hall ${h.state}${h.state === 'locked' ? ' warnwin' : ''}" data-key="hall">
+          <div class="ka-art"><i class="ka-scene"></i><i class="ka-scrim"></i></div>
+          <div class="hall-main">${ic(open ? 'hall' : 'lock', 'hall-ic')}<h2 class="hall-state">${open ? 'Open' : h.state === 'locked' ? 'Locked' : 'Sealed'}</h2><p class="note">${lead}</p></div>
+        </section>`
+      + body
+      + '<p class="note fine">In this version the Hall is only its gate. Rankings, friends and guilds need accounts and a server, so they come with the iOS app.</p>';
   }
 
   // How to put the app on the home screen, for someone who is still in a browser tab. Empty when there is nothing to say.
@@ -1256,46 +1306,45 @@
     return banner('', 'Add it to your Home Screen', 'In Safari, tap <b>Share</b>, then <b>Add to Home Screen</b>, and open Ascend from its icon. '
       + (state ? 'The app there starts empty. To take this progress along, save a backup here and restore it there.' : 'Do this before you start: the app on the Home Screen keeps its own progress.'), '', 'star');
   }
-  function appPanel() {
-    if (!shell) return '';
-    const ready = shell.updateReady;
-    return panel('App', (ready ? banner('ok', 'A new version is ready', 'Updating takes a moment and keeps your progress.', '<button class="btn small" data-act="app-update">Update now</button>', 'star') : '')
-      + `<p class="note">Version ${esc(shell.version)}${shell.built ? ' of ' + dateLabel(shell.built) : ''}. ${shell.standalone ? 'Installed on this device.' : 'Running in the browser.'}${shell.offline ? ' It opens without a connection.' : ''}</p>`
-      + installNote()
-      + (ready ? '' : '<button class="btn" data-act="app-check">Check for updates</button>'));
-  }
-  function backupPanel() {
-    const due = backupDue();
-    return panel('Backup', `<p class="note">A backup is your whole progress as one small file. Keep it somewhere safe, or use it to move your progress to another phone or to a PC.</p>
-      <p class="note${due ? ' due' : ''}" id="bk-line">${backupLine()}${due ? ' This device holds the only copy of your progress.' : ''}</p>
-      <button class="btn${due ? ' gold' : ''}" data-act="backup-save">Save a backup</button>
-      <button class="btn ghost" data-act="backup-open">Restore a backup</button>`);
-  }
 
+  // Settings are lists of rows: what it is, one sentence on it, and its one control.
+  const setRow = (key, title, text, right, cls) => `<div class="opt ${cls || ''}" data-key="s-${key}"><span class="o-main"><b>${title}</b><small>${text}</small></span>${right || ''}</div>`;
+  const rowBtn = (act, label, cls) => `<button class="btn small ${cls || ''}" data-act="${act}">${label}</button>`;
   function systemScreen() {
-    const since = E.daysBetween(state.testDay, state.lastDay), due = E.retestDue(state);
-    const hard = state.hard
-      ? banner('warn', 'Hard mode is on', 'All XP +' + Math.round(T.hardBonus * 100) + '%. A broken streak wipes your level bar and costs one level. The penalty extra task is doubled. Rank is never lost.',
-          state.hardOffPending ? '<p class="note"><b>It switches off when your current streak ends.</b></p><button class="btn small" data-act="hard-keep">Keep Hard mode</button>' : '<button class="btn small" data-act="hard-off">Switch off</button>')
-      : `<p class="note">Off by default. All XP +${Math.round(T.hardBonus * 100)}%, its own titles and a marked emblem. The price: a broken streak wipes your level bar and costs one level, and the penalty extra task is doubled.</p><button class="btn danger" data-act="hard-on">Switch on Hard mode</button>`;
-    const sick = state.paused
-      ? banner('', 'Paused', 'Quest and streak are frozen. There is no penalty while you recover.', '<button class="btn small" data-act="pause-off">I am ready to train</button>', 'shield')
-      : `<p class="note">Pause the quest and the streak for as long as you need. Nothing is lost and there is no penalty.</p><button class="btn" data-act="pause-on">Pause: injured or sick</button>`;
-    const stash = stashInfo();
-    return head('system', 'System', 'Player settings.')
-      + panel('Hunter name', `<div class="addrow"><input class="field" id="in-name" maxlength="20" value="${esc(state.name)}" autocomplete="off" aria-label="Hunter name"><button class="btn" data-act="rename">Save</button></div>`)
-      + panel('Hard mode', hard)
-      + panel('Injured or sick', sick)
-      + panel('Awakening Test', `<p class="note">Last test: ${dateLabel(state.testDay)}${since ? ', ' + plural(since, 'day') + ' ago' : ''}. ${due ? '<b>A re-test is due.</b>' : 'A re-test is suggested every four weeks.'} It places each task again: a better result jumps a tier, and stats never go down.</p>
-        <button class="btn" data-act="retest">Retake the Awakening Test</button>`)
-      + appPanel()
-      + backupPanel()
-      + panel('Data', `<p class="note" id="sync-line">${esc(syncText())}</p>
-        ${stash ? `<div class="opt"><span class="o-main"><b>Earlier copy on this device</b><small>Level ${stash.state.level}, last played ${dateLabel(stash.state.lastDay)}. It was replaced by ${stash.why === 'backup' ? 'a backup' : stash.why === 'swapped by hand' ? 'the copy you switched to' : 'your cloud save'} on ${dateLabel(E.dayKey(new Date(stash.at)))}.</small></span><button class="btn small ${armed === 'stash' ? 'on' : ''}" data-act="stash-use">${armed === 'stash' ? 'Confirm' : 'Use it'}</button></div>` : ''}
-        <button class="btn danger" data-act="reset">${armed === 'reset' ? 'Tap again to erase everything' : 'Erase all progress'}</button>`)
-      + panel('Testing tools', `<p class="note">For trying the prototype. Skipping moves the game clock one day ahead, and an unfinished quest is scored as it stands. Going back to today throws away everything done while skipping.</p>
-        <button class="btn" data-act="skip">Skip to tomorrow</button>
-        ${testing() ? '<button class="btn ghost" data-act="unskip">Back to today (+' + plural(state.debugOffset, 'day') + ' skipped)</button>' : ''}`)
+    const since = E.daysBetween(state.testDay, state.lastDay), due = E.retestDue(state), bonus = Math.round(T.hardBonus * 100);
+    const training = [
+      state.hard
+        ? setRow('hard', 'Hard mode is on', state.hardOffPending ? 'It switches off when your current streak ends.' : 'All XP +' + bonus + '%. A broken streak wipes the level bar and costs one level, and the penalty task is doubled. Rank is never lost.',
+            state.hardOffPending ? rowBtn('hard-keep', 'Keep it on') : rowBtn('hard-off', 'Switch off'), 'warn')
+        : setRow('hard', 'Hard mode', 'All XP +' + bonus + '%, its own titles and a marked emblem. The price: a broken streak wipes the level bar and costs one level.', rowBtn('hard-on', 'Switch on')),
+      state.paused
+        ? setRow('pause', 'Paused', 'Quest and streak are frozen. There is no penalty while you recover.', rowBtn('pause-off', 'Resume'), 'on')
+        : setRow('pause', 'Injured or sick', 'Pause the quest and the streak for as long as you need. Nothing is lost.', rowBtn('pause-on', 'Pause')),
+      setRow('test', 'Awakening Test', (due ? '<b>A re-test is due.</b> ' : '') + 'Last taken ' + dateLabel(state.testDay) + (since ? ', ' + plural(since, 'day') + ' ago' : '') + '. It places each task again, and stats never go down.', rowBtn('retest', 'Re-test', due ? 'gold' : '')),
+    ];
+    let appPart = '';
+    if (shell) {
+      const where = (shell.standalone ? 'Installed on this device.' : 'Running in the browser.') + (shell.offline ? ' It opens without a connection.' : '');
+      appPart = sect('App', group([shell.updateReady
+        ? setRow('app', 'A new version is ready', 'Updating takes a moment and keeps your progress. ' + where, rowBtn('app-update', 'Update now', 'gold'), 'on')
+        : setRow('app', 'Version ' + esc(shell.version), (shell.built ? 'From ' + dateLabel(shell.built) + '. ' : '') + where, rowBtn('app-check', 'Check for updates'))]) + installNote());
+    }
+    const stash = stashInfo(), bdue = backupDue();
+    const data = [
+      setRow('sync', 'Where it is saved', `<span id="sync-line">${esc(syncText())}</span>`),
+      setRow('backup', 'Backup', `Your whole progress as one small file, to keep safe or to move to another phone or a PC. <span id="bk-line"${bdue ? ' class="due"' : ''}>${backupLine()}${bdue ? ' This device holds the only copy of your progress.' : ''}</span>`, rowBtn('backup-save', 'Save', bdue ? 'gold' : '')),
+      setRow('restore', 'Restore a backup', 'Continue from a backup file, or from its text.', rowBtn('backup-open', 'Restore')),
+    ];
+    if (stash) data.push(setRow('stash', 'Earlier copy on this device', 'Level ' + stash.state.level + ', last played ' + dateLabel(stash.state.lastDay) + '. It was replaced by ' + (stash.why === 'backup' ? 'a backup' : stash.why === 'swapped by hand' ? 'the copy you switched to' : 'your cloud save') + ' on ' + dateLabel(E.dayKey(new Date(stash.at))) + '.', rowBtn('stash-use', armed === 'stash' ? 'Confirm' : 'Use it', armed === 'stash' ? 'on' : '')));
+    data.push(setRow('erase', 'Erase all progress', armed === 'reset' ? '<b>Tap again to erase everything.</b> This cannot be undone.' : 'Start over from the Awakening Test. This cannot be undone.', rowBtn('reset', armed === 'reset' ? 'Erase' : 'Erase all', 'danger')));
+    const tools = [setRow('skip', 'Skip to tomorrow', 'Moves the game clock one day ahead. An unfinished quest is scored as it stands.', rowBtn('skip', 'Skip a day'))];
+    if (testing()) tools.push(setRow('unskip', 'Back to today', plural(state.debugOffset, 'day') + ' skipped. Everything done while skipping is thrown away.', rowBtn('unskip', 'Go back')));
+    return head('system', 'System', 'Player settings')
+      + sect('Hunter', `<div class="opts"><div class="opt col" data-key="s-name"><label class="o-main" for="in-name"><b>Hunter name</b></label><div class="addrow"><input class="field" id="in-name" maxlength="20" value="${esc(state.name)}" autocomplete="off" aria-label="Hunter name" enterkeyhint="done"><button class="btn" data-act="rename">Save</button></div></div></div>`)
+      + sect('Training', group(training))
+      + appPart
+      + sect('Your progress', group(data))
+      + sect('Testing', group(tools), 'For trying the prototype')
       + '<p class="note fine">Prototype 2, rules from the design doc of 26 Nov 2026. GPS and Apple Health runs, reminders and the full Hunter Hall belong to the iOS app.</p>';
   }
 
@@ -1305,8 +1354,8 @@
   }
   // A red dot on a tab means something there is waiting for a decision.
   function tabDots() {
-    const freeSkill = E.skillSlots(state) > state.skills.length && E.SKILLS.some(k => !k.inactive && state.level >= k.level && !state.skills.includes(k.id));
-    return { hunter: E.trialInfo(state).canStart || freeSkill, system: E.retestDue(state) || backupDue() || !!(shell && shell.updateReady) };
+    const h = hunterDots();
+    return { hunter: h.card || h.skills, system: E.retestDue(state) || backupDue() || !!(shell && shell.updateReady) };
   }
   const TABS = ['quest', 'hunter', 'log', 'hall', 'system'];
   const tabsIn = tabs && tabs.querySelector('.tabs-in');
@@ -1330,7 +1379,7 @@
     const keep = a && app.contains(a) && a.dataset && a.dataset.act ? [a.dataset.act, a.dataset.id || '', a.dataset.n || '', a.dataset.kind || ''] : null;
     const body = tab === 'hunter' ? hunterScreen() : tab === 'log' ? logScreen() : tab === 'hall' ? hallScreen() : tab === 'system' ? systemScreen() : questScreen();
     app.dataset.tab = tab;
-    morph(app, updateBar() + testBar() + hud() + `<div class="screen" data-key="scr-${tab}">${body}</div>`);
+    morph(app, updateBar() + testBar() + `<div class="screen" data-key="scr-${tab}">${body}</div>`);
     if (keep && !app.contains(document.activeElement)) for (const el of app.querySelectorAll('[data-act="' + keep[0] + '"]')) {
       if ((el.dataset.id || '') === keep[1] && (el.dataset.n || '') === keep[2] && (el.dataset.kind || '') === keep[3] && !el.disabled) { try { el.focus({ preventScroll: true }); } catch (e) {} break; }
     }
@@ -1366,11 +1415,12 @@
     update();
     play(app.querySelector('.screen'), [{ opacity: 0, transform: `translateX(${dir * 22}px)` }, { opacity: 1, transform: 'none' }], { duration: 340 });
   }
-  // The small header shows once the full one has scrolled up under the status bar.
+  // The small header shows once the top of the screen has scrolled up under the status bar: the level bar on the
+  // quest screen, the title on the others.
   let hudEl = null, io = null;
   const setMini = on => root.classList.toggle('mini-on', !!on && !!state);
   function watchHud() {
-    const h = state ? app.querySelector('.hud') : null;
+    const h = state ? app.querySelector('.hud .xprow') || app.querySelector('.scr-head') : null;
     if (h === hudEl) return;
     if (io && hudEl) io.unobserve(hudEl);
     hudEl = h;
@@ -1400,8 +1450,8 @@
   // The first look at the screen: the header, then each block, rise into place one after another.
   function intro() {
     if (calm.matches) return;
-    const els = [app.querySelector('.hud'), ...app.querySelectorAll('.screen > :not(.quests), .screen > .quests > *')].filter(Boolean).slice(0, 9);
-    els.forEach((el, i) => play(el, [{ opacity: 0, transform: 'translateY(18px)' }, { opacity: 1, transform: 'none' }], { duration: 560, delay: 40 + i * 60, fill: 'backwards' }));
+    const els = [...app.querySelectorAll('.screen > *')].slice(0, 7);
+    els.forEach((el, i) => play(el, [{ opacity: 0, transform: 'translateY(16px)' }, { opacity: 1, transform: 'none' }], { duration: 520, delay: 40 + i * 70, fill: 'backwards' }));
     play(tabs, [{ transform: 'translateY(105%)' }, { transform: 'none' }], { duration: 560, delay: 140, fill: 'backwards' });
   }
 
@@ -1478,17 +1528,15 @@
     layer.innerHTML = `<div class="overlay k-onboard" role="dialog" aria-modal="true"><div class="win">
       <i class="orn t"></i><i class="orn b"></i>
       <div class="gate aura-2"><div class="ka-art"><i class="ka-scene"></i>${figure(false)}<i class="ka-scrim"></i></div>
-        <span class="chip">${crest(0, 0, 'mini')}Rank E</span>
-        <div class="ka-text"><div class="label">System notice</div><h1 class="win-title">Daily Quest</h1><div class="win-sub"><span>${old ? 'System update.' : 'You have qualified as a Player.'}</span></div></div>
+        <div class="ka-text"><div class="label">System notice</div><h1 class="win-title">Daily Quest</h1><div class="win-sub">${old ? 'System update.' : 'You have qualified as a Player.'}</div></div>
       </div>
       ${lead}
       <div class="slot" id="ob-install">${installNote()}</div>
-      ${banner('', 'Before you start', 'This is a training game, not medical advice. If you have a heart or joint condition, are coming back from an injury, or are not sure, check with a doctor first. Stop if you feel sharp pain, dizziness or chest tightness.', '', 'shield')}
       <div class="form" id="testform">
         <label>Hunter name<input class="field" id="t-name" maxlength="20" placeholder="Player" autocomplete="off" value="${old ? esc(old.name || '') : ''}"></label>
-        <h2 class="step">${ic('trial')}Awakening Test</h2>
-        <p class="note">Four short tests. Do them fresh, or enter honest recent numbers. You can re-test later.</p>
+        <div class="step-head"><h2 class="step">${ic('trial')}Awakening Test</h2><p class="note">Four short tests. Do them fresh, or enter honest recent numbers. You can re-test later.</p></div>
         ${testForm(old ? { pushups: old.test && old.test.pushups, runMax: old.test && old.test.run } : null)}
+        ${banner('', 'Before you start', 'This is a training game, not medical advice. If you have a heart or joint condition, are coming back from an injury, or are not sure, check with a doctor first. Stop if you feel sharp pain, dizziness or chest tightness.', '', 'shield')}
         <button class="btn primary" data-act="begin">${old ? 'Continue the climb' : 'Accept the quest'}</button>
         <button class="btn ghost" data-act="backup-open">I have a backup to restore</button>
       </div>
@@ -1513,7 +1561,7 @@
     tapId = id; tapCount = 0; modal = 'tap';
     const day = E.today(state);
     layer.innerHTML = `<div class="tapzone" role="dialog" aria-modal="true">
-      <div class="row"><span class="win-title small">${qname(id)}</span><span class="chip">${fmt(id, day.progress[id])} / ${fmt(id, day.targets[id])} so far</span></div>
+      <div class="row"><span class="win-title small">${qname(id)}</span><span class="pill sofar">${fmt(id, day.progress[id])} / ${fmt(id, day.targets[id])} so far</span></div>
       <button class="tap-pad" data-act="tap-hit" aria-label="Count one rep">
         <span class="tap-ring" id="tap-ring" style="--p:${tapShare()}"><span class="tap-num" id="tap-num">0</span></span>
         <span class="note">Tap anywhere for each rep. For push-ups, put the phone under your chest and tap it with your nose.</span>
@@ -1540,7 +1588,7 @@
     retire();
     modal = 'plank';
     layer.innerHTML = `<div class="tapzone warn" role="dialog" aria-modal="true">
-      <div class="row"><span class="win-title small">Plank</span><span class="chip">${mmss(p.done)} / ${mmss(p.need)} so far</span></div>
+      <div class="row"><span class="win-title small">Plank</span><span class="pill sofar">${mmss(p.done)} / ${mmss(p.need)} so far</span></div>
       <div class="tap-pad still"><span class="tap-ring" id="pl-ring" style="--p:0"><span class="tap-num" id="pl-num">0:00</span></span><span class="note" id="pl-note">${plank.left ? mmss(plank.left) + ' to go. Elbows under shoulders, body in one line.' : 'The penalty time is done. Anything more is yours.'}</span></div>
       <div class="row"><button class="btn ghost" data-act="pl-cancel">Cancel</button><button class="btn" data-act="pl-toggle" id="pl-toggle" data-focus>Start</button><button class="btn primary grow" data-act="pl-done">Log time</button></div>
     </div>`;
@@ -1612,6 +1660,7 @@
       if (qsel === id) reveal(app.querySelector('.quest[data-id="' + id + '"]'));
     },
     top() { view.scrollTo({ top: 0, behavior: calm.matches ? 'auto' : 'smooth' }); },
+    fold(id) { openDetails[id] = !openDetails[id]; render(); },
     'chest-open'() { openChest(); },
     add(id, el) { haptic('tap'); floatUp(el, '+' + el.dataset.n); add(id, parseFloat(el.dataset.n)); },
     'add-custom'(id, el) {
@@ -1678,6 +1727,7 @@
     focus(id) { done(E.setFocus(state, E.today(state).focus === id ? null : id)); },
     felt(id) {
       if (!E.setFelt(state, id).ok) return;
+      openDetails.felt = false;
       save(); render();
       layer.querySelectorAll('[data-act="felt"]').forEach(b => b.classList.toggle('on', b.dataset.id === id));
     },
@@ -1818,7 +1868,6 @@
     else tryBackup(text);
   });
   document.addEventListener('input', e => { if (e.target.closest && e.target.closest('#testform')) previewTest(); });
-  document.addEventListener('toggle', e => { const k = e.target.dataset && e.target.dataset.keep; if (k) openDetails[k] = e.target.open; }, true);
   document.addEventListener('keydown', e => {
     if (e.key === 'Escape' && modal && modal !== 'onboard') {
       const b = layer.querySelector('[data-act="close-modal"], [data-act="tap-cancel"], [data-act="pl-cancel"], [data-act="backup-cancel"]');

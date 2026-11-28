@@ -40,7 +40,7 @@ or to move progress between a phone and a PC, use **System, Backup** (see [Backu
 | `tests/pwa.test.js` | 23 checks that drive the installable web app the way a phone does: install tags and manifest, offline play, new versions (in use, while opening, half deployed, second window), backup and restore, the notch, the tab bar while scrolling and typing, and three screen sizes. |
 | `tests/gallery.js` | Takes pictures of every screen and reward moment for looking at the design. `node tests/gallery.js [scene ...] [--out dir] [--scale 2] [--width 400]` |
 | `tests/serve.js` | The small server the browser tests use. It serves either form, and can swap the site for a "new deploy" or go offline. |
-| `.github/workflows/deploy.yml` | Runs the rule tests and the build, then publishes `dist/site` on GitHub Pages. |
+| `.github/workflows/deploy.yml` | Runs the rule tests and the build, then publishes `dist/site` on GitHub Pages. On a pull request it also runs both browser suites. |
 | `v1/` | The first prototype, kept for the tests that carry an old save over. |
 
 ## Build, test, deploy
@@ -60,7 +60,8 @@ launch pictures.
 **Deploying.** Every push to `main` runs `.github/workflows/deploy.yml`, which publishes
 `dist/site` at https://kcglr.github.io/ascend-gym-project/. Installed copies pick the new version
 up by themselves. The repository setting **Pages, Source** has to be **GitHub Actions**. A pull
-request runs the rule tests and the build without deploying.
+request runs the rule tests, the build and both browser suites without deploying, so long test
+runs happen in the pull request's checks.
 
 **The Claude Artifact form.** `dist/artifact/index.html` is the same page as a body fragment for a
 Claude Artifact, published with every `assets/*.webp` at `assets/<name>.webp` and the capabilities
@@ -98,18 +99,50 @@ insets. It has not been run on a real iPhone or in Safari.
 
 ## The look
 
-**Strategies taken from polished Chinese mobile games** (the strategies, not anyone's art):
+The theme is the "Abyss System": dark neon system windows with cut corners and lit edges, cyan and
+violet glow, bars cut on a slant, sparks, and painted art made for this app. It is rich on purpose.
+What keeps a screen easy to take in is its order, the way well-established fitness apps do it: one
+clear thing to look at, and the rest sorted under it.
 
-- Depth in layers: a painted backdrop, drifting motes, framed glass panels, painted figures that
-  break out of their frames, and a spark layer on top.
-- Ornate frames instead of plain boxes: chamfered corners, a gradient metal edge, corner wedges.
+**Layout rules**
+
+- **A title, one hero, then sections.** Each screen opens with its emblem in a lit diamond, its
+  name in the italic display type, one caption line, and at most one figure on the right (the
+  streak on Quest, the Essence on Hunter). At most one hero window follows: the day ring on Quest,
+  the licence on Hunter, the gate on Hunter Hall. Everything else is a labelled section: a small
+  HUD label with a diamond and a line that fades out, then one panel or one list of small cards.
+  A panel never sits inside another panel.
+- **Nothing is repeated.** The level strip is the foot of the hero on Quest and is not carried onto
+  the other tabs. The streak, the score and the scene are one window, not three.
+- **The light is ranked.** The hero, the reward windows and the one primary button glow the most.
+  Next comes what is open or in use: the open task, the selected tab, an equipped title. Panels,
+  rows and plain buttons carry the lit edge without an outer glow, and what is locked goes dim.
+- **Progress reads at a glance.** The day's score is a neon ring. Three marks sit on it: no penalty
+  from 25%, the streak grows from 75%, and the chest at the top, which the lit part runs away from
+  and comes back to. Each task has a medal whose ring closes as reps come in and a segmented bar; a
+  finished task turns green and is stamped CLEAR. Each day in the Log calendar is a cell that fills
+  from the bottom as far as that day got.
+- **Details on request.** Only the open task shows its buttons and tags. The XP breakdown folds
+  away under "Earned today". "How did it feel?" shows until it is answered. "Also today" lists only
+  what can be done today: a Rank Trial, a rest token, Overdrive, a re-test.
+- **Room.** An 18 px gutter (`--gut`), 24 px between sections (`--gap-sec`) and 10 px inside them
+  (`--gap-in`). The screens are checked from a 320 px phone to a PC, where the app keeps a
+  phone-width column.
+- **Bars.** The tab bar is a lit strip with a framed light that glides to the selected tab. The
+  small header that follows the page down is a floating card: level, XP and streak on Quest, the
+  screen's name everywhere else.
+- **One message at a time.** Small messages ("Strength +1", a new title) wait while a reward window
+  is up and come in after it closes.
+
+**The game look**
+
+- Depth in layers: a painted backdrop, slow drifting motes, glass panels, the hunter breaking out
+  of the hero window, and a spark layer on top.
+- System windows with a diamond on their top and bottom edge and lit wedges in two corners.
 - Rank crests that grow with the tier: E is a bare shield, C grows wings, S has a crown and halo.
-- One glossy primary button per screen with a light sweep, quiet secondary buttons.
-- A daily activity track: the score bar has markers at 25% (no penalty) and 75% (streak +1) and a
-  chest at the end.
 - Reward moments with a reveal: the chest is tapped open and the loot counts up, a level-up bursts,
   a rank-up cracks the old crest and slams the new one in.
-- Stamps on finished tasks, red dots on tabs that have something to do, currency pills in the status strip.
+- Red dots on tabs that have something to do, and gold frames on what is equipped.
 
 **How it is built**
 
@@ -118,9 +151,16 @@ insets. It has not been run on a real iPhone or in Safari.
   the tokens under `:root[data-skin]` and turn the painted scenes with `--hue`.
 - A mood class re-colours a whole subtree: `.gold`, `.warn`, `.ok`. Aura classes `.aura-0` to
   `.aura-5` set `--a` and `--a2` for crest glow, hero aura and the licence card.
-- Every framed thing shares one recipe at the top of `ui.css`: `::before` is the edge, `::after`
-  the glass, both cut by one chamfer polygon from `--c`. A new framed component only joins that
-  selector list and sets `--c`, `--edge` and `--fill`.
+- Every framed thing shares one recipe at the top of `ui.css`: `::before` is the edge (`--edge`),
+  `::after` the glass inside it (`--fill`), both cut by one chamfer polygon from `--c`. Windows and
+  panels (`.win`, `.card`) add the lit corner wedges; rows (`.opt`) take a quieter edge. A new
+  framed component only joins that selector list and sets `--c`, `--edge` and `--fill`. Because
+  both pseudo-elements are taken, anything else a framed element needs (a dot, a badge) is a child.
+- Things that are turned or placed for good use the `rotate` and `translate` properties, so an
+  effect that animates `transform` adds to them instead of replacing them.
+- Screens are put together from a few helpers in `ui.js`: `head()` for the title, `sect()` for a
+  labelled section, `card()` for a panel, `group()` and `opt()` for a list of rows, `banner()` for
+  a notice.
 - Icons are one sprite (`assets/glyphs.webp`, 5 by 4 cells) used as a CSS mask, so they take the
   text colour. `ic('name')` in `ui.js` picks the cell; the names are the `GLYPHS` list, which has
   to match `manifest.json`. Painted objects are plain images through `ob('name')`.
@@ -136,13 +176,19 @@ and never name a game, a show or an artist. Sheets were generated on black and c
 `art/process.py`, which also un-multiplies the glow so edges stay clean on any colour. To change
 a picture, replace its master in `art/src/`, run `python3 art/process.py`, then `node build.js`.
 
-**Changes to how the screens work**
+**How the screens work**
 
-- The quest list shows the buttons of one task at a time. It opens the first unfinished task, and a
-  tap on any row opens that one. A task that is finished stays open for a moment, stamped, then folds
-  away while the next one opens.
-- After a clear the reward waits in a chest: "Open the chest" shows the Essence, the XP rows and the
+- **Quest:** the hero with the day ring and the level strip, then the task list. The list shows the
+  buttons of one task at a time. It opens the first unfinished task, and a tap on any card opens
+  that one. A task that is finished stays open for a moment, stamped, then folds away while the
+  next one opens.
+- After a clear the reward waits in a chest: "Open the chest" shows the Essence, the XP and the
   "how did it feel" question.
+- **Hunter:** four parts (Card, Titles, Skills, Shop) with a lit frame that glides to the one that
+  was picked. Card shows the licence, the three stats and what the next rank asks for.
+- **Log:** the last five weeks as a calendar, with the picked day's four tasks underneath, then the
+  streak, the road to the full routine and lifetime totals.
+- **System:** settings in sections: Hunter, Training, App, Your progress, Testing.
 - The tab bar has icons, and a red dot when a Rank Trial can start, a skill slot is free, a
   re-test or a backup is due, or a new version of the app is waiting.
 
@@ -155,7 +201,8 @@ A few rules keep every screen moving the same way.
   leave speed up and are quicker than arrivals, things that change in place ease in and out. Only
   rewards and presses overshoot.
 - **Durations by weight.** A press goes down in 70 ms. Small changes take 140 to 240 ms. A card
-  unfolding or the tab light gliding takes about 400 ms, a reward window about half a second.
+  unfolding or the tab light gliding takes about 400 ms, a reward window about half a second. The
+  day ring sweeps up when Quest opens and slides to each new value in 0.9 s, the bars in 0.7 s.
 - **Presses.** Every button goes down at once and springs back when the finger lifts. On an iPhone
   the page listens for touches so the pressed state shows at all.
 - **Nothing is redrawn.** `render()` describes the screen as HTML and `morph()` patches the page,
@@ -165,16 +212,17 @@ A few rules keep every screen moving the same way.
   its new value) and played once after the patch with the Web Animations API. `changed()` and
   `roll()` remember what each part showed last, so an effect only plays when a value really changed.
 - **Feedback where the thumb is.** "+5" rises off the button that was pressed. "+12 XP" appears
-  beside the level bar that is in view and adds up over quick taps. A finished card flashes and is
-  stamped. On an iPhone with iOS 18 or later, taps and finished tasks give a light haptic tick
+  beside the level bar that is in view and adds up over quick taps. A finished task's card flashes
+  green and the CLEAR stamp lands on it. On an iPhone with iOS 18 or later, taps and finished tasks give a light haptic tick
   (`haptic()`); Android phones vibrate briefly.
 - **One thing after another.** A finished card holds for a beat, then folds while the next one
   unfolds. A window rises and its parts follow 45 ms apart. A window that closes fades out on a
-  layer of its own (`#ghost`), so the page or the next window is live at once.
+  layer of its own (`#ghost`), so the page or the next window is live at once. Messages that come
+  with a reward window wait for it to close (`later` in `ui.js`).
 - **Moving between tabs.** Each tab keeps its scroll position. The page slides toward the side of
   the tab that was tapped (View Transitions where the browser has them, a short slide elsewhere)
-  while the light behind the tabs glides across. The open tab, or the small header that follows the
-  page down, takes you back to the top.
+  while the light behind the tabs glides across. The mark in Hunter's segmented control glides the
+  same way. The open tab, or the small header that follows the page down, takes you back to the top.
 - **The frame.** The document itself never scrolls. The page scrolls inside `#view`, a fixed frame,
   and the tab bar, the small header and the windows are laid out against it and pinned to what is
   really visible (`--vv-top`, `--vv-gap`). While a field is being typed in on a phone, the tab bar
